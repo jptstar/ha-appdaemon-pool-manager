@@ -19,6 +19,42 @@ class FiltrationPiscine(
     ControlMixin,
     hass.Hass,
 ):
+    def initialize(self):
+        """Initialize the production controller and optional HA policy inputs."""
+        self.entity_derogation_chauffage = self.args.get("entity_derogation_chauffage")
+        super().initialize()
+
+        if self.entity_derogation_chauffage:
+            self.listen_state(
+                self.change_derogation_chauffage,
+                self.entity_derogation_chauffage,
+            )
+
+    def change_derogation_chauffage(self, entity, attribute, old, new, kwargs):
+        """Re-evaluate pump demand immediately when heating override changes."""
+        self.traitement(kwargs)
+
+    def derogation_chauffage_active(self):
+        """Return True when Home Assistant requests temporary pool heating."""
+        if not self.entity_derogation_chauffage:
+            return False
+        try:
+            return self.get_state(self.entity_derogation_chauffage) == "on"
+        except Exception:
+            return False
+
+    def pac_besoin_chauffe(self):
+        """Treat an explicit HA heating override as a heat-pump flow request.
+
+        Home Assistant remains responsible for the override timer and PAC
+        operating mode. Pool Manager only converts that policy signal into a
+        circulation requirement. With no configured override entity, behavior
+        remains identical to the previous release.
+        """
+        if self.derogation_chauffage_active():
+            return True
+        return super().pac_besoin_chauffe()
+
     def set_consigne_electrolyseur(self, valeur, force=False):
         """Set chlorinator production without blocking critical pump control.
 

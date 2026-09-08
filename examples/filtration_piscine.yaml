@@ -1,0 +1,151 @@
+pool_manager:
+  module: filtration_piscine
+  class: FiltrationPiscine
+
+  # Main sensors
+  temperature_eau: sensor.pool_water_temperature
+  restitution_inst: sensor.grid_power
+
+  # General mode / scheduling
+  mode_de_fonctionnement: input_select.pool_operating_mode
+  h_pivot: input_datetime.pool_pivot_time
+  duree_filtration_ete: input_number.pool_daily_filtration_target
+  coef: input_number.pool_filtration_coefficient
+  mode_calcul: input_boolean.pool_use_curve_calculation
+  tempo_eau: input_number.pool_water_circulation_delay
+  mem_temp: input_number.pool_water_temperature_memory
+  arret_force: input_boolean.pool_force_stop
+
+  # Freeze protection
+  duree_bras_hors_gel: input_number.pool_freeze_circulation_duration
+  intervalle_bras_hors_gel: input_number.pool_freeze_circulation_interval
+
+  # Pump / variable-speed drive (for example provided by an Aquagem integration)
+  cde_pompe: fan.pool_pump
+  fan_variateur_pompe: fan.pool_pump
+
+  message_filtration_piscine: input_text.pool_manager_status
+  message_filtration_piscine_detail: input_text.pool_manager_status_detail
+  entity_debug_w: input_text.pool_manager_power_debug
+
+  # Heat pump (for example provided by an AstralPool integration)
+  entity_pac_climate: climate.pool_heat_pump
+  entity_pac_conso: sensor.pool_heat_pump_power
+  entity_pompe_conso: sensor.pool_pump_power
+
+  # Optional Home Assistant policy signal. HA owns the override timer/PAC mode;
+  # Pool Manager treats this as a circulation demand.
+  entity_derogation_chauffage: input_boolean.pool_heating_override
+
+  seuil_pac_veille_w: 200
+  seuil_pac_silent_w: 500
+  seuil_pac_smart_w: 1200
+  seuil_pac_turbo_w: 1900
+  vitesse_min_pac_active: 47
+  marge_temp_pac_c: 0.3
+
+  pac_priorite_soleil: true
+  heure_debut_pac_soleil: "10:00:00"
+  heure_fin_pac_soleil: "17:30:00"
+  pac_import_max_jour_w: 300
+  pac_tempo_anti_coupure_jour: 900
+  pac_maintien_jour_force: true
+
+  pac_prioritaire_absolue: true
+  vitesse_pac_prioritaire: 47
+
+  # Daily quota
+  garantir_quota_journalier: true
+  heure_limite_quota_journalier: "22:00:00"
+  vitesse_min_garantie_quota: 47
+  vitesse_max_garantie_quota: 100
+
+  entity_volume_filtre_jour: input_number.pool_filtered_volume_today
+  entity_temps_filtration_equivalent_jour: input_number.pool_equivalent_filtration_today
+  entity_date_cumul: input_text.pool_daily_counter_date
+
+  # Hydraulic model
+  debit_max_pompe_m3h: 16
+  debit_min_filtration_utile_m3h: 8
+  volume_piscine_m3: 48
+
+  # Pump speeds
+  vitesse_mode_temperature: 70
+  vitesse_reference_filtration: 70
+  vitesse_min_filtration_utile: 47
+  vitesse_min_solaire: 47
+  vitesse_max_solaire: 100
+  vitesse_rattrapage: 50
+  vitesse_min_rattrapage: 47
+  vitesse_rattrapage_palier_2: 55
+  vitesse_rattrapage_palier_3: 70
+  vitesse_rattrapage_palier_4: 85
+  vitesse_max_complement_soir: 70
+  vitesse_brassage_nuit: 35
+  vitesse_max_maintien_faible: 60
+  vitesse_max_maintien_faible_pac: 75
+  vitesse_max_rattrapage_surplus_faible: 70
+
+  # Solar management
+  seuil_surplus_demarrage_w: 500
+  seuil_surplus_arret_w: 250
+  surplus_max_w: 900
+  marge_surplus_securite: 50
+  tempo_min_on_solaire: 900
+  tempo_min_off_solaire: 600
+  tempo_anti_coupure_solaire: 180
+  tempo_stabilite_surplus: 180
+  heure_debut_solaire: "09:00:00"
+  heure_fin_solaire: "18:00:00"
+  heure_fin_rattrapage: "22:00:00"
+
+  # Catch-up logic
+  seuil_ratio_rattrapage_1: 0.05
+  seuil_ratio_rattrapage_2: 0.10
+  seuil_ratio_rattrapage_3: 0.20
+  seuil_ratio_rattrapage_4: 0.30
+  reste_min_complement_soir_h: 0.5
+  avancement_min_sans_complement: 0.90
+
+  # Variable-speed drive stability
+  delta_vitesse_min: 5
+  pas_vitesse_max: 10
+  tempo_changement_vitesse: 30
+
+  # Hybrid PID on net grid power
+  pid_kp: 0.09
+  pid_ki: 0.015
+  pid_kd: 0.02
+  pid_target_w: -30
+  pid_deadband_w: 40
+  pid_integral_min: -4000
+  pid_integral_max: 4000
+  pid_step_max: 5
+
+  # Estimated pump power curve: [speed %, watts]
+  points_puissance_pompe:
+    - [11, 150]
+    - [23, 200]
+    - [35, 262]
+    - [47, 327]
+    - [52, 386]
+    - [58, 432]
+    - [64, 483]
+    - [70, 544]
+    - [76, 584]
+    - [82, 658]
+    - [88, 743]
+    - [94, 828]
+    - [100, 884]
+
+  # Chlorination
+  entity_volet_piscine: cover.pool_cover
+  entity_consigne_electrolyseur: number.pool_chlorinator_production
+  entity_consigne_electrolyseur_volet_ouvert: input_number.pool_chlorination_cover_open
+  entity_consigne_electrolyseur_volet_ferme: input_number.pool_chlorination_cover_closed
+  consigne_electrolyseur_volet_ouvert_defaut: 90
+  consigne_electrolyseur_volet_ferme_defaut: 70
+  consigne_electrolyseur_arret: 0
+  tempo_arret_electrolyseur_s: 10
+  timeout_electrolyseur_force_s: 3
+  seuil_vitesse_electrolyseur_pct: 47

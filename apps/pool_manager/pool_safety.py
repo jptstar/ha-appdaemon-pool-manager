@@ -331,6 +331,11 @@ class SafetyMixin:
             self._cancel_pac_start()
             self.traitement({})
             return
+        values, valid_now, _ = self._pac_values()
+        if not valid_now or not pac_auto_conditions_demarrage(*values, self.pac_auto_start_thresholds):
+            self._cancel_pac_start()
+            self.traitement({})
+            return
         if not self._available(self.entity_pac_climate):
             self._fault("pac_climate", "entité PAC indisponible, démarrage interdit")
             self._cancel_pac_start()
@@ -383,9 +388,10 @@ class SafetyMixin:
         return True
 
     def _pac_post_active(self):
-        if self.pac_post_circulation_until is None:
+        until = getattr(self, "pac_post_circulation_until", None)
+        if until is None:
             return False
-        if datetime.datetime.now() >= self.pac_post_circulation_until:
+        if datetime.datetime.now() >= until:
             self.pac_post_circulation_until = None
             return False
         return True
@@ -453,7 +459,7 @@ class SafetyMixin:
     def pac_besoin_chauffe(self):
         if getattr(self, "pac_auto_start_pending", False) or self._pac_post_active():
             return True
-        if self.fail_safe_active and self._pac_power_active():
+        if getattr(self, "fail_safe_active", False) and self._pac_power_active():
             return True
         return super().pac_besoin_chauffe()
 

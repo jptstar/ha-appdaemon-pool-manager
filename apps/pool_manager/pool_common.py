@@ -30,6 +30,40 @@ def calcule_objectif_filtration(temperature_eau, coef, mode_abaque):
     return min(max(0.0, base_time * float(coef)), 24.0)
 
 
+def format_duree_hm(hours):
+    """Format decimal hours as a stable human-readable hours/minutes value."""
+    try:
+        total_minutes = int(round(max(0.0, float(hours)) * 60.0))
+    except (TypeError, ValueError):
+        total_minutes = 0
+
+    heures, minutes = divmod(total_minutes, 60)
+    return f"{heures} h {minutes:02d}"
+
+
+def build_quota_status(objectif, effectue, decision):
+    """Build the optional Home Assistant quota summary line."""
+    try:
+        objectif_h = min(max(0.0, float(objectif)), 24.0)
+    except (TypeError, ValueError):
+        objectif_h = 0.0
+
+    try:
+        effectue_h = max(0.0, float(effectue))
+    except (TypeError, ValueError):
+        effectue_h = 0.0
+
+    restant_h = max(0.0, objectif_h - effectue_h)
+    decision_txt = str(decision).strip() or "—"
+
+    return (
+        f"BESOIN {format_duree_hm(objectif_h)} | "
+        f"EFFECTUÉ {format_duree_hm(effectue_h)} | "
+        f"RESTANT {format_duree_hm(restant_h)} | "
+        f"DÉCISION {decision_txt}"
+    )
+
+
 def en_heure(t):
     h = int(t)
     m = int((t - h) * 60)

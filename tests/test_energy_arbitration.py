@@ -76,7 +76,7 @@ def test_recoverable_quota_only_becomes_hard_priority_near_limit():
     strategy = FakeStrategy(remaining_h=4.0)
 
     comfortable = strategy.etat_garantie_quota(10.0, 14.0)
-    critical = strategy.etat_garantie_quota(8.8, 14.0)
+    critical = strategy.etat_garantie_quota(8.75, 14.0)
 
     assert comfortable["recuperable"] is True
     assert comfortable["critique"] is False

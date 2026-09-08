@@ -10,9 +10,12 @@
 
 - [x] Add an optional heating-override input to Pool Manager.
 - [x] Let Home Assistant own the override timer and heat-pump mode/preset.
-- [ ] Remove direct Aquagem pump commands from the Home Assistant heating-override automation after production validation.
+- [x] Validate the heating override with Pool Manager as the pump authority in production.
+- [x] Make PAC/quota arbitration energy-aware so an impossible quota cannot force indefinite 100% pump speed during heavy grid import.
+- [ ] Remove the now-disabled legacy Home Assistant heating-override automation after a longer production validation period.
+- [ ] Audit remaining Home Assistant automations for direct Aquagem pump commands.
 - [ ] Let Pool Manager become the only component that commands pump on/off and speed during automatic operation.
-- [ ] Validate PAC override and solar/quota arbitration in production before broadening the override beyond Intelligent mode.
+- [ ] Continue production validation of PAC + solar + quota arbitration.
 
 ## 0.3.x - Decision engine cleanup
 

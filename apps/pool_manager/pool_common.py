@@ -2,6 +2,7 @@
 # Copyright (C) 2026 jptstar
 
 import datetime
+import math
 import re
 from datetime import timedelta
 
@@ -15,10 +16,34 @@ TAB_MODE = [
 
 JOURNAL = 2
 
+# Adaptive filtration curve:
+# - conventional T/2 rule while the water is cool/moderate;
+# - continuous exponential growth once warm-water biological demand rises.
+ABAQUE_ADAPTATIF_SEUIL_C = 25.0
+ABAQUE_ADAPTATIF_CROISSANCE = 0.05
 
-def duree_abaque(temperature_eau):
+
+def duree_abaque_historique(temperature_eau):
+    """Return the former HACF/Jeedom polynomial curve for reference only."""
     t = max(float(temperature_eau), 10.0)
     return 0.00335 * t**3 - 0.14953 * t**2 + 2.43489 * t - 10.72859
+
+
+def duree_abaque(temperature_eau):
+    """Return the adaptive daily target in equivalent hours at reference flow.
+
+    Up to 25 °C the familiar temperature/2 rule remains easy to understand.
+    Above 25 °C an exponential branch increases the target progressively while
+    remaining continuous at the transition point (12.5 h at 25 °C).
+    """
+    t = max(float(temperature_eau), 10.0)
+    if t <= ABAQUE_ADAPTATIF_SEUIL_C:
+        return t / 2.0
+
+    base_h = ABAQUE_ADAPTATIF_SEUIL_C / 2.0
+    return base_h * math.exp(
+        ABAQUE_ADAPTATIF_CROISSANCE * (t - ABAQUE_ADAPTATIF_SEUIL_C)
+    )
 
 
 def duree_classique(temperature_eau):
@@ -29,6 +54,26 @@ def calcule_objectif_filtration(temperature_eau, coef, mode_abaque):
     """Calculate the daily equivalent filtration target, capped to one day."""
     base_time = duree_abaque(temperature_eau) if mode_abaque else duree_classique(temperature_eau)
     return min(max(0.0, base_time * float(coef)), 24.0)
+
+
+def calcule_temps_filtration_equivalent(heures_reelles, debit_actuel, debit_reference):
+    """Convert runtime into equivalent hours using the relative hydraulic model.
+
+    The pump flow is estimated, not measured. Using the ratio between estimated
+    current flow and estimated reference flow avoids pretending that the m³
+    counter is a physical flow-meter while still accounting for variable speed.
+    """
+    try:
+        heures = max(0.0, float(heures_reelles))
+        debit = max(0.0, float(debit_actuel))
+        debit_ref = float(debit_reference)
+    except (TypeError, ValueError):
+        return 0.0
+
+    if debit_ref <= 0.0:
+        return 0.0
+
+    return heures * (debit / debit_ref)
 
 
 def format_duree_hm(hours):

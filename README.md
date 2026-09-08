@@ -44,8 +44,10 @@ HACS installs the whole `pool_manager` directory. Your AppDaemon `app_dir` must 
 2. In HACS options, enable **AppDaemon apps discovery & tracking**.
 3. Add `jptstar/ha-appdaemon-pool-manager` as a custom **AppDaemon** repository.
 4. Download Pool Manager.
-5. Add an app entry to your AppDaemon `apps.yaml` using `examples/apps.yaml` as a starting point.
+5. Copy [`examples/filtration_piscine.yaml`](examples/filtration_piscine.yaml) into your own AppDaemon configuration area and replace the placeholder entity IDs with your Home Assistant entities.
 6. Reload/restart AppDaemon and inspect the logs before allowing the app to control production equipment.
+
+Keep your personal `filtration_piscine.yaml` outside the HACS-managed Pool Manager directory so HACS updates cannot overwrite your site-specific configuration. `examples/apps.yaml` is kept for compatibility, but `examples/filtration_piscine.yaml` is the canonical complete configuration template.
 
 ## Important migration note
 
@@ -112,7 +114,7 @@ Aquagem and AstralPool remain external Home Assistant integrations. Pool Manager
 
 ## Configuration
 
-See [`examples/apps.yaml`](examples/apps.yaml). Entity IDs in the example are placeholders and must be replaced with entities from your Home Assistant instance.
+Use [`examples/filtration_piscine.yaml`](examples/filtration_piscine.yaml) as the canonical complete template. Entity IDs in the example are placeholders and must be replaced with entities from your Home Assistant instance. Keep the resulting personal YAML outside the HACS-managed app directory.
 
 ## License
 

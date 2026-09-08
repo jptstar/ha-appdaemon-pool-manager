@@ -2,6 +2,7 @@
 # Copyright (C) 2026 jptstar
 
 import datetime
+import re
 from datetime import timedelta
 
 TAB_MODE = [
@@ -41,8 +42,8 @@ def format_duree_hm(hours):
     return f"{heures} h {minutes:02d}"
 
 
-def build_quota_status(objectif, effectue, decision):
-    """Build the optional Home Assistant quota summary line."""
+def build_quota_status(objectif, effectue, decision=None):
+    """Build the quota summary used in the existing detailed status field."""
     try:
         objectif_h = min(max(0.0, float(objectif)), 24.0)
     except (TypeError, ValueError):
@@ -54,14 +55,28 @@ def build_quota_status(objectif, effectue, decision):
         effectue_h = 0.0
 
     restant_h = max(0.0, objectif_h - effectue_h)
-    decision_txt = str(decision).strip() or "—"
-
-    return (
-        f"BESOIN {format_duree_hm(objectif_h)} | "
-        f"EFFECTUÉ {format_duree_hm(effectue_h)} | "
-        f"RESTANT {format_duree_hm(restant_h)} | "
-        f"DÉCISION {decision_txt}"
+    texte = (
+        f"Besoin {format_duree_hm(objectif_h)} | "
+        f"Effectué {format_duree_hm(effectue_h)} | "
+        f"Restant {format_duree_hm(restant_h)}"
     )
+
+    # Kept for backwards compatibility with the 0.1.2 helper function API.
+    if decision is not None:
+        decision_txt = str(decision).strip()
+        if decision_txt:
+            texte += f" | Décision {decision_txt}"
+
+    return texte
+
+
+_PROGRESS_FRAGMENT_RE = re.compile(r"^\s*\d+(?:\.\d+)?/\d+(?:\.\d+)?h\s*$", re.IGNORECASE)
+
+
+def remove_legacy_progress_fragments(detail):
+    """Remove old x.y/z.yh fragments now represented by the quota summary."""
+    parts = [part.strip() for part in str(detail or "").split("|")]
+    return " | ".join(part for part in parts if part and not _PROGRESS_FRAGMENT_RE.match(part))
 
 
 def en_heure(t):

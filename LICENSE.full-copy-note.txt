@@ -1,1 +1,0 @@
-The full GPL-3.0 license text used by this project is identical to the LICENSE file in jptstar/ha-aquagem-isaver and to the canonical GNU GPL v3 text published by the Free Software Foundation.

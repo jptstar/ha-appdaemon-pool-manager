@@ -1,0 +1,28 @@
+name: Publish v0.2.1
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/publish-v0.2.1.yml
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cc7ca9ceb499684119e3d69c2be9ca1cc743091d
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v0.2.1 \
+            --target cc7ca9ceb499684119e3d69c2be9ca1cc743091d \
+            --title "Pool Manager v0.2.1" \
+            --notes "Energy-aware PAC/quota arbitration.\n\n- Keep PAC circulation at the configured minimum when grid import exceeds the daytime PAC allowance and quota is not recoverably critical.\n- Let the existing solar/PID logic use available export before increasing pump speed.\n- Stop an already impossible daily quota from forcing the pump to 100% indefinitely.\n- Preserve hard quota priority while the target is still recoverable and actually critical.\n- Add status messages for PAC eco grid mode, deferred quota, critical quota and impossible quota.\n- Add regression tests for the production case that previously produced about 2.7 kW grid import with the pump at 100%."

@@ -49,7 +49,19 @@ HACS installs the whole `pool_manager` directory. Your AppDaemon `app_dir` must 
 
 ## Important migration note
 
-Version 0.1.x is a safe baseline intended to remain close to the existing production behavior. Do **not** remove existing Home Assistant pool/PAC automations simply because the app has been installed. The heating-override automation still needs a staged migration before Pool Manager can become the only component commanding the pump.
+The migration to a single pump-control authority is staged. Do **not** remove existing Home Assistant pool/PAC automations simply because the app has been installed. Heating-override pump commands should only be removed after the optional override input below has been configured and validated in production.
+
+## Heating override boundary
+
+Pool Manager can consume an optional Home Assistant heating-override policy signal:
+
+```yaml
+entity_derogation_chauffage: input_boolean.pool_heating_override
+```
+
+Home Assistant remains responsible for the override timer and for turning/configuring the heat pump. Pool Manager does not change the heat-pump protocol or preset; it interprets the active override as a PAC circulation demand. In Intelligent mode this enters the same PAC-priority path as a normal detected heating demand, including the existing PAC/solar/quota coordination.
+
+If `entity_derogation_chauffage` is not configured, behavior is unchanged from the previous release.
 
 ## Daily filtration limit
 

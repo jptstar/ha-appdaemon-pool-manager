@@ -26,6 +26,8 @@ pool_manager:
 
   message_filtration_piscine: input_text.pool_manager_status
   message_filtration_piscine_detail: input_text.pool_manager_status_detail
+  # Optional structured quota summary; input_text max 255 is recommended.
+  message_filtration_quota: input_text.pool_manager_quota_status
   entity_debug_w: input_text.pool_manager_power_debug
 
   # Heat pump (for example provided by an AstralPool integration)

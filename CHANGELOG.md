@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.3 - Simpler status fields
+
+- Reuse the existing short and detailed Home Assistant status helpers for quota information.
+- Remove the need for the extra `message_filtration_quota` helper introduced in 0.1.2.
+- Keep the short status focused on the current Pool Manager decision.
+- Prefix the existing detailed status with `Besoin / Effectué / Restant` in hours and minutes.
+- Remove duplicate legacy `x.y/z.yh` progress fragments from the detailed status.
+- Add regression tests for merged quota/detail formatting.
+
 ## 0.1.2 - Structured quota status
 
 - Add an optional structured Home Assistant quota summary with need, completed equivalent filtration, remaining equivalent filtration and the current Pool Manager decision.

@@ -65,6 +65,49 @@ Home Assistant remains responsible for the override timer and for turning/config
 
 If `entity_derogation_chauffage` is not configured, behavior is unchanged from the previous release.
 
+## Adaptive filtration target
+
+When `mode_calcul` is enabled, Pool Manager now uses a continuous adaptive curve instead of the former hot-water polynomial:
+
+```text
+T <= 25 °C : target = T / 2
+T > 25 °C  : target = 12.5 × exp(0.05 × (T - 25))
+```
+
+The two branches meet continuously at **12.5 equivalent hours at 25 °C**. The familiar temperature/2 rule is therefore preserved in cool and moderate water, while warm water progressively receives more filtration without the very aggressive rise of the historical polynomial.
+
+Examples before applying the existing filtration coefficient:
+
+| Water temperature | Adaptive target |
+| ---: | ---: |
+| 20 °C | 10 h |
+| 24 °C | 12 h |
+| 25 °C | 12 h 30 |
+| 28 °C | ~14 h 31 |
+| 30 °C | ~16 h 03 |
+| 31.1 °C | ~16 h 57 |
+| 34 °C | ~19 h 36 |
+
+The existing daily **24 h** cap remains a hard safety limit.
+
+## Equivalent filtration and hydraulic estimate
+
+Pool Manager does not assume that a percentage of pump speed is itself a percentage of hydraulic filtration. Equivalent filtration is now accumulated from the **relative estimated flow**:
+
+```text
+equivalent hours = real runtime × estimated current flow / estimated reference flow
+```
+
+With the example model (`47% ≈ 8 m³/h`, reference `70% ≈ 11.47 m³/h`, `100% ≈ 16 m³/h`), one real hour contributes approximately:
+
+```text
+47%  -> 0.70 equivalent h
+70%  -> 1.00 equivalent h
+100% -> 1.39 equivalent h
+```
+
+The `entity_volume_filtre_jour` value remains an **estimate**, because there is no physical flow-meter. Pool Manager deliberately uses the relative flow ratio for quota decisions rather than claiming that the calculated m³ value is a measured volume. If a real flow sensor is added in the future, the hydraulic layer can be upgraded without changing the high-level filtration strategy.
+
 ## Daily filtration limit
 
 The daily equivalent filtration target is capped to **24 hours**. The same capped value is used for:

@@ -143,4 +143,5 @@ pool_manager:
   consigne_electrolyseur_volet_ferme_defaut: 70
   consigne_electrolyseur_arret: 0
   tempo_arret_electrolyseur_s: 10
+  timeout_electrolyseur_force_s: 3
   seuil_vitesse_electrolyseur_pct: 47

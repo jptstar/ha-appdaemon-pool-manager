@@ -15,10 +15,12 @@ Shelly / energy ----------------/
                                                   +--> filtration quota
                                                   +--> solar optimization
                                                   +--> heat-pump flow priority
+                                                  +--> optional PAC Heat/Off policy
+                                                  +--> freeze / fail-safe safety
                                                   +--> chlorination coordination
 ```
 
-Home Assistant automations remain a good place for high-level user policy such as automatic pool-mode selection, seasonal heat-pump enable/disable and temporary heating overrides. Backwash and critical hydraulic safety logic should remain in the PLC/controller when applicable.
+Home Assistant remains a good place for high-level user policy such as automatic pool-mode selection and temporary heating overrides. Pool Manager can optionally take ownership of the normal seasonal PAC `Heat`/`Off` decision so the required pump circulation can be established **before** the PAC is started. Backwash and critical hydraulic valve/pressure safety logic should remain in the PLC/controller when applicable.
 
 ## HACS layout
 
@@ -30,6 +32,7 @@ apps/
     filtration_piscine.py   # AppDaemon entry point
     pool_common.py          # shared helpers and filtration math
     pool_status.py          # status / quota presentation
+    pool_safety.py          # PAC sequencing, freeze and fail-safe layer
     pool_lifecycle.py       # startup, listeners and scheduling
     pool_devices.py         # pump, PAC and chlorinator entity handling
     pool_strategy.py        # quota / solar / priority strategy
@@ -51,7 +54,59 @@ Keep your personal `filtration_piscine.yaml` outside the HACS-managed Pool Manag
 
 ## Important migration note
 
-The migration to a single pump-control authority is staged. Do **not** remove existing Home Assistant pool/PAC automations simply because the app has been installed. Heating-override pump commands should only be removed after the optional override input below has been configured and validated in production.
+The migration to a single pump-control authority is staged. Do **not** remove existing Home Assistant pool/PAC automations simply because the app has been installed.
+
+`gestion_pac_auto` and `hors_gel_adaptatif` are disabled by default. First configure and validate the new safety inputs. When `gestion_pac_auto: true` is enabled, disable any separate Home Assistant automation that performs the same normal seasonal PAC `Heat`/`Off` regulation, otherwise the two controllers can fight each other. A dedicated temporary heating-override automation can remain because the override boundary is explicitly supported.
+
+## Automatic PAC management
+
+Automatic PAC takeover is opt-in:
+
+```yaml
+gestion_pac_auto: true
+entity_temperature_exterieure: sensor.outdoor_temperature
+entity_temperature_exterieure_moyenne_24h: sensor.outdoor_temperature_mean_24h
+entity_temperature_exterieure_moyenne_7j: sensor.outdoor_temperature_mean_7d
+heure_debut_pac_auto: "08:00:00"
+heure_fin_pac_auto: "20:00:00"
+```
+
+The default warm-weather start conditions reproduce the existing production policy:
+
+```text
+ambient > 25 °C
+24 h mean > 19 °C
+7 d mean > 18 °C
+```
+
+The default cold-weather stop conditions are:
+
+```text
+ambient < 21 °C
+24 h mean < 18 °C
+7 d mean < 17 °C
+```
+
+An automatic start is deliberately sequenced:
+
+```text
+heating policy becomes eligible
+        -> pump ON
+        -> pump percentage >= PAC minimum confirmed
+        -> climate -> Heat
+```
+
+If circulation cannot be confirmed within `pac_auto_timeout_demarrage_s` (30 s by default), the PAC is **not** started. The weather inputs are checked again immediately before the `Heat` command.
+
+A normal automatic stop is sequenced in the opposite safety order:
+
+```text
+climate -> Off
+        -> post-circulation (60 s by default)
+        -> normal Pool Manager pump strategy resumes
+```
+
+The PAC remains off outside the configured automatic window unless a temporary Home Assistant heating override is active.
 
 ## Heating override boundary
 
@@ -61,13 +116,56 @@ Pool Manager can consume an optional Home Assistant heating-override policy sign
 entity_derogation_chauffage: input_boolean.pool_heating_override
 ```
 
-Home Assistant remains responsible for the override timer and for turning/configuring the heat pump. Pool Manager does not change the heat-pump protocol or preset; it interprets the active override as a PAC circulation demand. In Intelligent mode this enters the same PAC-priority path as a normal detected heating demand, including the existing PAC/solar/quota coordination.
+The override automation may remain responsible for its timer and temporary PAC preset/mode. Pool Manager interprets the active override as a circulation demand and guarantees the same minimum-flow path. Automatic seasonal PAC policy does not fight an active override.
 
-If `entity_derogation_chauffage` is not configured, behavior is unchanged from the previous release.
+## Fail-safe entity handling
+
+The general fail-safe layer is enabled by default:
+
+```yaml
+fail_safe_active: true
+```
+
+Important degraded behaviors are intentionally conservative:
+
+- unavailable pool-water temperature never silently becomes 10 °C; Pool Manager uses the configured HA memory helper, then the last valid value, then `temperature_eau_secours_c` (32 °C by default);
+- an unavailable PAC climate entity blocks a new automatic PAC start;
+- if PAC power proves that the PAC is active while the climate state is unavailable, Pool Manager keeps a PAC circulation demand instead of assuming the PAC is off;
+- if PAC power indicates activity but pump state/speed cannot confirm the configured minimum circulation, Pool Manager first tries to restore circulation, then commands the PAC off after `pac_flow_fail_timeout_s` when the climate entity is controllable;
+- loss of one of the three PAC weather inputs blocks new starts immediately; a running automatic PAC can use the last complete weather snapshot for the configured grace period, then is switched off if the sensor fault persists;
+- fail-safe state changes are logged to `piscine_log` without adding another Home Assistant helper.
+
+`Arrêt Forcé` remains an explicit highest-priority user command.
+
+## Adaptive freeze protection
+
+The existing periodic `Hors Gel` circulation remains available. Optional adaptive protection adds a second safety layer:
+
+```yaml
+hors_gel_adaptatif: true
+hors_gel_continu_on_c: 1.0
+hors_gel_continu_off_c: 3.0
+```
+
+Behavior with the defaults:
+
+```text
+outdoor temperature <= 1 °C
+    -> continuous circulation at the minimum safe speed
+
+1 °C < temperature < 3 °C
+    -> hysteresis: keep the previous freeze-safety state
+
+outdoor temperature >= 3 °C
+    -> release continuous protection
+    -> if operating mode is Hors Gel, resume periodic circulation
+```
+
+A valid temperature at/below the low threshold can activate protection even if the Home Assistant mode-selection automation failed to switch the selector to `Hors Gel`. If the outdoor-temperature entity itself is unavailable while the operating mode is already `Hors Gel`, Pool Manager also falls back to continuous circulation. Chlorination is disabled during continuous freeze protection and the PAC is commanded off.
 
 ## Adaptive filtration target
 
-When `mode_calcul` is enabled, Pool Manager now uses a continuous adaptive curve instead of the former hot-water polynomial:
+When `mode_calcul` is enabled, Pool Manager uses a continuous adaptive curve instead of the former hot-water polynomial:
 
 ```text
 T <= 25 °C : target = T / 2
@@ -92,7 +190,7 @@ The existing daily **24 h** cap remains a hard safety limit.
 
 ## Equivalent filtration and hydraulic estimate
 
-Pool Manager does not assume that a percentage of pump speed is itself a percentage of hydraulic filtration. Equivalent filtration is now accumulated from the **relative estimated flow**:
+Pool Manager does not assume that a percentage of pump speed is itself a percentage of hydraulic filtration. Equivalent filtration is accumulated from the **relative estimated flow**:
 
 ```text
 equivalent hours = real runtime × estimated current flow / estimated reference flow

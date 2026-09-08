@@ -25,5 +25,5 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install pytest
-      - run: python -m py_compile apps/pool_manager/filtration_piscine.py
+      - run: python -m py_compile apps/pool_manager/*.py
       - run: pytest -q

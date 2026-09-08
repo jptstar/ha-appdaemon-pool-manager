@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2 - Structured quota status
+
+- Add an optional structured Home Assistant quota summary with need, completed equivalent filtration, remaining equivalent filtration and the current Pool Manager decision.
+- Format quota durations as hours and minutes for easier dashboard reading.
+- Keep the existing short status and detailed status outputs unchanged.
+- Keep the new quota output fully optional through `message_filtration_quota`.
+- Add regression tests for quota formatting and non-negative remaining time.
+
 ## 0.1.1 - Chlorinator safety timeout
 
 - Avoid sending a chlorinator production command when the Home Assistant number entity already has the requested value.

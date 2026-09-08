@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.0 - PAC automation and fail-safe safety layer
+
+- Add an opt-in automatic PAC policy using the existing warm/cold thresholds and the 08:00-20:00 operating window.
+- Sequence every automatic PAC start as pump ON -> confirmed minimum circulation speed -> PAC `Heat`; abort the PAC start if circulation cannot be confirmed within the configured timeout.
+- Sequence normal PAC shutdown as PAC `Off` -> configurable post-circulation -> return to the normal filtration strategy.
+- Keep the existing Home Assistant temporary heating override as a separate policy boundary; automatic PAC management does not fight an active override.
+- Add PAC flow fail-safe: when PAC power indicates activity but pump circulation at the minimum speed is not confirmed, attempt to restore circulation and stop the PAC after a bounded safety timeout when possible.
+- Add adaptive freeze protection with hysteresis: continuous minimum circulation at/below the low threshold, release only above the high threshold, while retaining the existing periodic `Hors Gel` circulation outside the critical range.
+- Make low outdoor temperature protection independent of the mode-selection automation, so a missed `Hors Gel` mode switch cannot leave the hydraulic circuit static during a real freeze.
+- Treat loss of the outdoor-temperature entity while already in `Hors Gel` as a freeze risk and fall back to continuous circulation.
+- Keep explicit `Arrêt Forcé` as the highest-priority user command.
+- Prevent an unavailable water-temperature sensor from silently becoming 10 °C: use the HA memory helper, then the last valid reading, then a configurable conservative fallback.
+- When PAC climate state is unavailable but power proves that the PAC is active, keep a PAC circulation demand instead of assuming the PAC is off.
+- Add fail-safe logging, regression tests and canonical configuration examples for the new safety settings.
+- Keep PAC automatic takeover and adaptive freeze circulation disabled by default for backwards compatibility; the general fail-safe layer remains enabled by default.
+
 ## 0.2.2 - Adaptive filtration target
 
 - Replace the former hot-water polynomial with a continuous adaptive curve: temperature/2 up to 25 °C, then a mild exponential branch above 25 °C.

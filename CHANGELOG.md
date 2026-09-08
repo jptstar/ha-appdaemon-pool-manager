@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.0 - Heating override boundary
+
+- Add optional `entity_derogation_chauffage` Home Assistant input.
+- Treat an active heating override as a PAC circulation demand in Intelligent mode.
+- Re-evaluate Pool Manager immediately when the override state changes.
+- Keep Home Assistant responsible for the override timer and PAC mode/preset.
+- Reuse the existing PAC priority, quota and solar arbitration instead of adding a second pump-control path.
+- Preserve previous behavior when the override entity is not configured.
+- Add regression tests for override detection and PAC-demand fallback.
+
 ## 0.1.3 - Simpler status fields
 
 - Reuse the existing short and detailed Home Assistant status helpers for quota information.

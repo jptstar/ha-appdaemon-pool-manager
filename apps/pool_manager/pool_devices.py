@@ -411,13 +411,21 @@ class DevicesMixin:
         if vitesse is None:
             vitesse = self.derniere_vitesse_commande if self.derniere_vitesse_commande is not None else 100
 
+        # Both values below come from the same approximate hydraulic model.
+        # The m³ counter remains an estimate; the daily decision uses only the
+        # relative flow ratio so we do not pretend to have a physical flowmeter.
         debit = self.debit_pompe(vitesse)
-        volume = debit * (delta_s / 3600.0)
+        heures_reelles = delta_s / 3600.0
+        volume = debit * heures_reelles
         self.volume_filtre_jour += volume
 
         vitesse_ref = max(self.vitesse_min_filtration_utile, self.vitesse_reference_filtration)
-        heures_reelles = delta_s / 3600.0
-        temps_eq = heures_reelles * (float(vitesse) / float(vitesse_ref))
+        debit_reference = self.debit_pompe(vitesse_ref)
+        temps_eq = calcule_temps_filtration_equivalent(
+            heures_reelles,
+            debit,
+            debit_reference,
+        )
         self.temps_filtration_equivalent_jour += temps_eq
 
         self.set_value(self.entity_volume_filtre_jour, round(self.volume_filtre_jour, 2))

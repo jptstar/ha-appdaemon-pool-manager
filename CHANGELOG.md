@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.2 - Adaptive filtration target
+
+- Replace the former hot-water polynomial with a continuous adaptive curve: temperature/2 up to 25 °C, then a mild exponential branch above 25 °C.
+- Keep the adaptive curve anchored at 12.5 equivalent hours at 25 °C with a 0.05 exponential growth coefficient and the existing 24 h safety cap.
+- Keep the former polynomial in the code as a reference helper, but no longer use it for the active `mode_calcul` abaque path.
+- Count equivalent filtration from the ratio of estimated hydraulic flow to estimated reference flow instead of the raw pump speed percentage.
+- Keep the daily filtered-volume helper explicitly approximate; Pool Manager does not claim to have a physical flow-meter.
+- Preserve 70% as the reference filtration speed in the current example configuration.
+- Add regression tests for the cool-water T/2 branch, continuity at 25 °C, hot-water exponential values and relative-flow equivalent-hour accounting.
+
 ## 0.2.1 - Energy-aware PAC/quota arbitration
 
 - Prevent an impossible daily quota from forcing the pump to 100% indefinitely.

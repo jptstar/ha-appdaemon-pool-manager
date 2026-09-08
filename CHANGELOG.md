@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.1 - Energy-aware PAC/quota arbitration
+
+- Prevent an impossible daily quota from forcing the pump to 100% indefinitely.
+- Distinguish a recoverable critical quota from a quota that is already mathematically impossible before the configured deadline.
+- Keep PAC circulation at its configured minimum when grid import exceeds the daytime PAC import allowance and quota is not recoverably critical.
+- Hand control back to the existing solar/PID logic while the installation is exporting or remains inside the permitted PAC import margin.
+- Preserve the PAC minimum-flow requirement during a heating override.
+- Surface `PAC éco réseau`, `quota différé`, `quota critique` and `quota impossible` decisions in the existing status fields.
+- Add regression tests based on the production case that previously drove the pump to 100% while importing about 2.7 kW.
+
 ## 0.2.0 - Heating override boundary
 
 - Add optional `entity_derogation_chauffage` Home Assistant input.

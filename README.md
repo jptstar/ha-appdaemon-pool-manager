@@ -29,6 +29,7 @@ apps/
   pool_manager/
     filtration_piscine.py   # AppDaemon entry point
     pool_common.py          # shared helpers and filtration math
+    pool_status.py          # optional structured quota/status output
     pool_lifecycle.py       # startup, listeners and scheduling
     pool_devices.py         # pump, PAC and chlorinator entity handling
     pool_strategy.py        # quota / solar / priority strategy
@@ -59,6 +60,22 @@ The daily equivalent filtration target is capped to **24 hours**. The same cappe
 - the calculated filtration schedule.
 
 A 24-hour target is represented as a full-day window rather than creating negative or next-day clock values.
+
+## Structured quota status
+
+An optional Home Assistant `input_text` can expose the quota in a human-readable form without replacing the existing status and detail messages:
+
+```text
+BESOIN 14 h 30 | EFFECTUÉ 6 h 12 | RESTANT 8 h 18 | DÉCISION Attente surplus solaire
+```
+
+Configure it with:
+
+```yaml
+message_filtration_quota: input_text.pool_manager_quota_status
+```
+
+A maximum length of **255 characters** is recommended for this helper. The decision label is taken from Pool Manager's current control state, while need/done/remaining use the same daily equivalent-filtration values as the control strategy.
 
 ## Restart behavior
 

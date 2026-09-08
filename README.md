@@ -27,16 +27,21 @@ This repository follows the HACS AppDaemon repository layout:
 ```text
 apps/
   pool_manager/
-    filtration_piscine.py
+    filtration_piscine.py   # AppDaemon entry point
+    pool_common.py          # shared helpers and filtration math
+    pool_lifecycle.py       # startup, listeners and scheduling
+    pool_devices.py         # pump, PAC and chlorinator entity handling
+    pool_strategy.py        # quota / solar / priority strategy
+    pool_control.py         # main decision and control loop
 ```
 
-HACS installs AppDaemon apps under the Home Assistant configuration AppDaemon apps directory. Your AppDaemon `app_dir` must point to the directory HACS uses.
+HACS installs the whole `pool_manager` directory. Your AppDaemon `app_dir` must point to the directory used by HACS for AppDaemon apps.
 
 ## Installation
 
 1. Install and configure AppDaemon with Home Assistant.
 2. In HACS options, enable **AppDaemon apps discovery & tracking**.
-3. Add this repository as a custom **AppDaemon** repository.
+3. Add `jptstar/ha-appdaemon-pool-manager` as a custom **AppDaemon** repository.
 4. Download Pool Manager.
 5. Add an app entry to your AppDaemon `apps.yaml` using `examples/apps.yaml` as a starting point.
 6. Reload/restart AppDaemon and inspect the logs before allowing the app to control production equipment.
@@ -47,7 +52,7 @@ Version 0.1.x is a safe baseline intended to remain close to the existing produc
 
 ## Daily filtration limit
 
-The daily equivalent filtration target is capped to **24 hours**. The same capped value is now used for:
+The daily equivalent filtration target is capped to **24 hours**. The same capped value is used for:
 
 - the displayed filtration duration;
 - the daily quota target;
@@ -71,6 +76,8 @@ Typical entity types:
 - pool cover: `cover`;
 - power/energy data: `sensor`;
 - user settings/status: Home Assistant helpers such as `input_number`, `input_boolean`, `input_select`, `input_datetime` and `input_text`.
+
+Aquagem and AstralPool remain external Home Assistant integrations. Pool Manager only orchestrates their entities.
 
 ## Configuration
 

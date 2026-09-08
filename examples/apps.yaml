@@ -33,6 +33,10 @@ pool_manager:
   entity_pac_conso: sensor.pool_heat_pump_power
   entity_pompe_conso: sensor.pool_pump_power
 
+  # Optional Home Assistant policy signal. HA owns the override timer/PAC mode;
+  # Pool Manager treats this as a circulation demand.
+  entity_derogation_chauffage: input_boolean.pool_heating_override
+
   seuil_pac_veille_w: 200
   seuil_pac_silent_w: 500
   seuil_pac_smart_w: 1200

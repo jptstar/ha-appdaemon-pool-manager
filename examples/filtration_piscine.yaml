@@ -180,3 +180,10 @@ pool_manager:
   tempo_arret_electrolyseur_s: 10
   timeout_electrolyseur_force_s: 3
   seuil_vitesse_electrolyseur_pct: 47
+
+  # Cold-water cell protection is enabled by default even if these lines are
+  # omitted. <=15 °C stops electrolysis; >=16 °C allows it again. If the real
+  # water-temperature entity is unavailable, electrolysis is inhibited.
+  protection_electrolyse_froid: true
+  electrolyse_temperature_arret_c: 15.0
+  electrolyse_temperature_reprise_c: 16.0

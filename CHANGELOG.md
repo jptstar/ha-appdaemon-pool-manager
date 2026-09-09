@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.2 - Compact status history
+
+- Stabilize `Message Filtration Piscine détail` so second-by-second timer countdowns no longer create Home Assistant state-history spam.
+- Replace changing countdown values with semantic states such as `temporisation arrêt`, `temporisation démarrage`, `attente surplus stable` and `anti-coupure`.
+- Remove instantaneous surplus, grid, PV and pump watt values from the detailed status because those values already belong in the dedicated debug field.
+- Preserve useful operational context such as daily quota, speed, PAC state, quota decisions, deadlines and freeze-protection information.
+- Deduplicate repeated semantic timer fragments.
+- Keep filtration, PAC, solar, quota and fail-safe control logic unchanged.
+- Add regression tests proving that changing timer seconds and electrical values no longer churn the detailed status.
+
 ## 0.4.1 - Cloudy-day catch-up fix
 
 - Allow Intelligent-mode daytime sanitary catch-up to start even when PV surplus is below the normal 500 W solar-start threshold.

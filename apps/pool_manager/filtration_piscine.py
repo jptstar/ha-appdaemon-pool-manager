@@ -24,6 +24,21 @@ class FiltrationPiscine(
     def initialize(self):
         """Initialize the production controller and optional HA policy inputs."""
         self.entity_derogation_chauffage = self.args.get("entity_derogation_chauffage")
+
+        # Cold-water chlorination protection. The lock starts conservative so an
+        # AppDaemon restart around the threshold cannot briefly enable the cell.
+        self.protection_electrolyse_froid = str(
+            self.args.get("protection_electrolyse_froid", "true")
+        ).lower() == "true"
+        self.electrolyse_temperature_arret_c = float(
+            self.args.get("electrolyse_temperature_arret_c", 15.0)
+        )
+        self.electrolyse_temperature_reprise_c = max(
+            self.electrolyse_temperature_arret_c,
+            float(self.args.get("electrolyse_temperature_reprise_c", 16.0)),
+        )
+        self.electrolyse_basse_temp_bloquee = True
+
         super().initialize()
 
         if self.entity_derogation_chauffage:
@@ -32,9 +47,25 @@ class FiltrationPiscine(
                 self.entity_derogation_chauffage,
             )
 
+        # The normal water-temperature listener intentionally ignores
+        # `unavailable`. This dedicated safety listener must not: an unavailable
+        # water probe immediately inhibits electrolysis.
+        temperature_eau = self.args.get("temperature_eau")
+        if temperature_eau:
+            self.listen_state(
+                self.change_temperature_electrolyse,
+                temperature_eau,
+            )
+
+        self.maj_electrolyseur()
+
     def change_derogation_chauffage(self, entity, attribute, old, new, kwargs):
         """Re-evaluate pump demand immediately when heating override changes."""
         self.traitement(kwargs)
+
+    def change_temperature_electrolyse(self, entity, attribute, old, new, kwargs):
+        """Apply the cold-water cell lock immediately on any probe change."""
+        self.maj_electrolyseur()
 
     def derogation_chauffage_active(self):
         """Return True when Home Assistant requests temporary pool heating."""
@@ -56,6 +87,72 @@ class FiltrationPiscine(
         if self.derogation_chauffage_active():
             return True
         return super().pac_besoin_chauffe()
+
+    def temperature_eau_brute_electrolyse(self):
+        """Return the physical water-probe value without fail-safe substitution."""
+        entity = self.args.get("temperature_eau")
+        if not entity:
+            return None
+        try:
+            value = self.get_state(entity)
+            if value is None or str(value).strip().lower() in {
+                "unknown",
+                "unavailable",
+                "none",
+                "",
+            }:
+                return None
+            return float(value)
+        except Exception:
+            return None
+
+    def electrolyse_temperature_autorisee(self):
+        """Protect the chlorinator cell with low-temperature hysteresis.
+
+        <= stop threshold: lock electrolysis.
+        >= resume threshold: release the lock.
+        Between thresholds: retain the previous state.
+        Missing probe: lock electrolysis immediately (fail-safe).
+        """
+        if not self.protection_electrolyse_froid:
+            return True
+
+        temperature = self.temperature_eau_brute_electrolyse()
+        if temperature is None:
+            self.electrolyse_basse_temp_bloquee = True
+            if hasattr(self, "_fault"):
+                self._fault(
+                    "electrolyse_temperature",
+                    "température eau indisponible, électrolyse interdite",
+                )
+            return False
+
+        if temperature <= self.electrolyse_temperature_arret_c:
+            self.electrolyse_basse_temp_bloquee = True
+        elif temperature >= self.electrolyse_temperature_reprise_c:
+            self.electrolyse_basse_temp_bloquee = False
+
+        if self.electrolyse_basse_temp_bloquee:
+            if hasattr(self, "_fault"):
+                self._fault(
+                    "electrolyse_temperature",
+                    f"eau {temperature:.1f} °C, électrolyse interdite sous "
+                    f"{self.electrolyse_temperature_reprise_c:.1f} °C",
+                )
+            return False
+
+        if hasattr(self, "_recover"):
+            self._recover(
+                "electrolyse_temperature",
+                f"température eau {temperature:.1f} °C compatible",
+            )
+        return True
+
+    def electrolyseur_autorise(self):
+        """Require both normal hydraulic safety and valid water temperature."""
+        if not self.electrolyse_temperature_autorisee():
+            return False
+        return super().electrolyseur_autorise()
 
     def set_consigne_electrolyseur(self, valeur, force=False):
         """Set chlorinator production without blocking critical pump control.

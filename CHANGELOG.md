@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.1 - Cold-water chlorination protection
+
+- Inhibit chlorinator production when the real pool-water temperature is at or below 15 °C by default.
+- Add 1 °C hysteresis by default: chlorination is only released again at or above 16 °C, avoiding rapid on/off switching around the threshold.
+- Treat an `unknown` or `unavailable` physical water-temperature entity as unsafe for electrolysis and immediately command zero production.
+- Keep the existing filtration temperature fail-safe separate: filtration may use memory/last-valid/conservative fallback, while chlorination deliberately requires a valid physical water-temperature reading.
+- Re-evaluate chlorination immediately on every water-temperature state change, including transitions to `unavailable`.
+- Keep the protection enabled by default with optional `protection_electrolyse_froid`, `electrolyse_temperature_arret_c` and `electrolyse_temperature_reprise_c` settings.
+- No Home Assistant automation change is required for this protection; it uses the existing `temperature_eau` and chlorinator entities.
+
 ## 0.3.0 - PAC automation and fail-safe safety layer
 
 - Add an opt-in automatic PAC policy using the existing warm/cold thresholds and the 08:00-20:00 operating window.

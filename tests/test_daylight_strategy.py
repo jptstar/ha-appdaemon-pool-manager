@@ -34,3 +34,33 @@ def test_intelligent_night_mixing_can_be_disabled_without_affecting_freeze_mode(
     assert module.brassage_nuit_intelligent_autorise("Intelligent", False) is False
     assert module.brassage_nuit_intelligent_autorise("Intelligent", True) is True
     assert module.brassage_nuit_intelligent_autorise("Hors Gel", False) is True
+
+
+def test_cloudy_day_does_not_block_daytime_catchup():
+    app = object.__new__(module.DaylightMixin)
+    app.suivre_soleil_reel = True
+    app._daylight_active = lambda: True
+    app.seuil_surplus_demarrage_w = 500
+    app.tempo_stabilite_surplus = 180
+    app.debut_stabilite_surplus = datetime.now()
+
+    ok, remaining = app.stabilite_surplus_ok(0)
+
+    assert ok is True
+    assert remaining == 0
+    assert app.debut_stabilite_surplus is None
+
+
+def test_cloudy_day_catchup_still_cannot_start_before_daylight():
+    app = object.__new__(module.DaylightMixin)
+    app.suivre_soleil_reel = True
+    app._daylight_active = lambda: False
+    app.seuil_surplus_demarrage_w = 500
+    app.tempo_stabilite_surplus = 180
+    app.debut_stabilite_surplus = datetime.now()
+
+    ok, remaining = app.stabilite_surplus_ok(0)
+
+    assert ok is False
+    assert remaining == 180
+    assert app.debut_stabilite_surplus is None

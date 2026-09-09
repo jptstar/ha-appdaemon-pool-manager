@@ -5,6 +5,7 @@ MODULE_DIR = Path(__file__).parents[1] / "apps" / "pool_manager"
 sys.path.insert(0, str(MODULE_DIR))
 
 from pool_common import build_quota_status, format_duree_hm, remove_legacy_progress_fragments
+from pool_status import compact_detail_status
 
 
 def test_format_decimal_hours_as_hours_and_minutes():
@@ -32,3 +33,27 @@ def test_legacy_decimal_progress_is_removed_from_detail():
 def test_non_progress_detail_is_preserved():
     detail = "démarrage | 47% | fin 17:30"
     assert remove_legacy_progress_fragments(detail) == detail
+
+
+def test_countdown_seconds_are_replaced_by_stable_semantic_states():
+    detail = "arrêt dans 536s | 47% | anti-coupure 421s | maintien 97s"
+    assert compact_detail_status(detail) == (
+        "temporisation arrêt | 47% | anti-coupure | maintien"
+    )
+
+
+def test_start_and_surplus_stability_countdowns_no_longer_churn_detail():
+    first = compact_detail_status("attente on 412s | stabilité 127s | surplus 650W")
+    second = compact_detail_status("attente on 411s | stabilité 126s | surplus 642W")
+    assert first == "temporisation démarrage | attente surplus stable"
+    assert second == first
+
+
+def test_instantaneous_electrical_values_are_removed_from_detail_but_useful_context_stays():
+    detail = "quota critique | réseau 862W | PV 798W | pompe 327W réel | 70% | limite 22:00"
+    assert compact_detail_status(detail) == "quota critique | 70% | limite 22:00"
+
+
+def test_duplicate_semantic_timer_labels_are_not_repeated():
+    detail = "anti-coupure 200s | anti-coupure 199s | quota différé"
+    assert compact_detail_status(detail) == "anti-coupure | quota différé"

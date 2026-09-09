@@ -8,6 +8,9 @@ pool_manager:
 
   # General mode / scheduling
   mode_de_fonctionnement: input_select.pool_operating_mode
+  # Optional master automatic-policy gate. When configured, automatic PAC
+  # regulation is suspended unless this entity is on.
+  entity_mode_auto: input_boolean.pool_auto_mode
   h_pivot: input_datetime.pool_pivot_time
   duree_filtration_ete: input_number.pool_daily_filtration_target
   coef: input_number.pool_filtration_coefficient

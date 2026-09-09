@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.0 - Daylight-aware Intelligent mode
+
+- Use AppDaemon's real sunrise/sunset information for the main Intelligent filtration window when available; retain the configured fixed solar hours as an automatic fallback.
+- Pace expected daily filtration progress across the real daylight period instead of a permanently fixed 09:00-18:00 window.
+- Prevent a large electrical export from starting Intelligent filtration before sunrise when real-sun tracking is enabled.
+- Start evening catch-up after the real sunset while keeping the existing configured catch-up deadline.
+- Turn the existing `mem_temp` helper into a smoothed thermal reference: while the pump is stopped, the next filtration target starts from the representative stored water temperature.
+- Once circulation has run long enough for the water probe to be representative, the live filtration target immediately uses the real measured temperature and the persisted thermal reference is updated progressively.
+- Never update the persisted thermal reference from a fail-safe substituted water temperature; only a valid physical water probe may refresh it.
+- Disable periodic night mixing by default in `Intelligent` mode because it is no longer required merely to refresh temperature.
+- Keep `Hors Gel` periodic and continuous circulation completely independent and unchanged by the Intelligent night-mixing setting.
+- Add regression tests for thermal-reference smoothing, daylight quota pacing and the separation between Intelligent night mixing and freeze protection.
+
 ## 0.3.1 - Cold-water chlorination protection
 
 - Inhibit chlorinator production when the real pool-water temperature is at or below 15 °C by default.
@@ -53,7 +66,7 @@
 - Re-evaluate Pool Manager immediately when the override state changes.
 - Keep Home Assistant responsible for the override timer and PAC mode/preset.
 - Reuse the existing PAC priority, quota and solar arbitration instead of adding a second pump-control path.
-- Preserve previous behavior when the override entity is not configured.
+- Preserve previous behavior when no override entity is configured.
 - Add regression tests for override detection and PAC-demand fallback.
 
 ## 0.1.3 - Simpler status fields
@@ -61,9 +74,8 @@
 - Reuse the existing short and detailed Home Assistant status helpers for quota information.
 - Remove the need for the extra `message_filtration_quota` helper introduced in 0.1.2.
 - Keep the short status focused on the current Pool Manager decision.
-- Prefix the existing detailed status with `Besoin / Effectué / Restant` in hours and minutes.
-- Remove duplicate legacy `x.y/z.yh` progress fragments from the detailed status.
-- Add regression tests for merged quota/detail formatting.
+- Prefix the existing detailed status with the daily equivalent-filtration state and then keep the useful operating details.
+- Remove duplicate legacy `x.y/z.yh` progress fragments from the detailed line.
 
 ## 0.1.2 - Structured quota status
 
@@ -71,7 +83,6 @@
 - Format quota durations as hours and minutes for easier dashboard reading.
 - Keep the existing short status and detailed status outputs unchanged.
 - Keep the new quota output fully optional through `message_filtration_quota`.
-- Add regression tests for quota formatting and non-negative remaining time.
 
 ## 0.1.1 - Chlorinator safety timeout
 

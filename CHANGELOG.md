@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.3 - PAC automatic mode gate
+
+- Add optional `entity_mode_auto` support for Home Assistant's master pool automatic-mode boolean.
+- When configured, suspend normal automatic PAC start/stop policy unless the entity is `on`.
+- Abort a pending automatic PAC start immediately if automatic mode is disabled during the pump-first startup sequence.
+- Preserve the current PAC state when automatic mode is disabled, matching the previous Home Assistant automation behavior instead of forcing an automatic shutdown.
+- Keep temporary heating override handling and PAC flow fail-safe protection independent of the automatic-mode gate.
+- Preserve backward compatibility when `entity_mode_auto` is omitted.
+- Add regression tests and canonical YAML examples for the new gate.
+
 ## 0.4.2 - Compact status history
 
 - Stabilize `Message Filtration Piscine détail` so second-by-second timer countdowns no longer create Home Assistant state-history spam.

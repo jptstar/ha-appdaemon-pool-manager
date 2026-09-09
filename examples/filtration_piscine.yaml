@@ -8,6 +8,10 @@ pool_manager:
 
   # General mode / scheduling
   mode_de_fonctionnement: input_select.pool_operating_mode
+  # Optional master switch for automatic policy. When configured, automatic
+  # PAC regulation is suspended unless this entity is on. Manual override and
+  # PAC flow fail-safe protection remain independent.
+  entity_mode_auto: input_boolean.pool_auto_mode
   h_pivot: input_datetime.pool_pivot_time
   duree_filtration_ete: input_number.pool_daily_filtration_target
   coef: input_number.pool_filtration_coefficient
@@ -67,6 +71,7 @@ pool_manager:
   # PAC automatic seasonal policy (opt-in for backwards compatibility).
   # Start sequence is always: pump -> >= minimum speed -> climate Heat.
   # Stop sequence is: climate Off -> post-circulation -> normal pump strategy.
+  # When entity_mode_auto is configured, this policy runs only while it is on.
   gestion_pac_auto: false
   heure_debut_pac_auto: "08:00:00"
   heure_fin_pac_auto: "20:00:00"

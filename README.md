@@ -13,7 +13,7 @@ Shelly / energy ----------------/
                                                   |
                                                   +--> pump on/off + speed
                                                   +--> filtration quota
-                                                  +--> solar optimization
+                                                  +--> daylight / solar optimization
                                                   +--> heat-pump flow priority
                                                   +--> optional PAC Heat/Off policy
                                                   +--> freeze / fail-safe safety
@@ -33,6 +33,7 @@ apps/
     pool_common.py          # shared helpers and filtration math
     pool_status.py          # status / quota presentation
     pool_safety.py          # PAC sequencing, freeze and fail-safe layer
+    pool_daylight.py        # daylight window + thermal-reference memory
     pool_lifecycle.py       # startup, listeners and scheduling
     pool_devices.py         # pump, PAC and chlorinator entity handling
     pool_strategy.py        # quota / solar / priority strategy
@@ -162,6 +163,31 @@ outdoor temperature >= 3 °C
 ```
 
 A valid temperature at/below the low threshold can activate protection even if the Home Assistant mode-selection automation failed to switch the selector to `Hors Gel`. If the outdoor-temperature entity itself is unavailable while the operating mode is already `Hors Gel`, Pool Manager also falls back to continuous circulation. Chlorination is disabled during continuous freeze protection and the PAC is commanded off.
+
+## Daylight-aware Intelligent mode
+
+`Intelligent` mode can now follow the real daylight period instead of treating 09:00-18:00 as the biological/solar day all year:
+
+```yaml
+suivre_soleil_reel: true
+marge_apres_lever_soleil_min: 0
+marge_avant_coucher_soleil_min: 0
+```
+
+When AppDaemon sun information is available, sunrise starts the preferred filtration period and sunset ends it. The existing `heure_debut_solaire` / `heure_fin_solaire` values remain an automatic fallback. The expected daily quota is paced over this daylight window, and a large electrical export cannot by itself start the pump before sunrise. Evening catch-up begins after the real sunset and retains the configured catch-up deadline.
+
+The water-temperature helper `mem_temp` is also used as a **thermal reference** while the pump is stopped. This avoids running the pump at night merely to obtain a representative temperature:
+
+```yaml
+temperature_reference_lissee: true
+temperature_reference_alpha: 0.35
+temperature_reference_min_update_s: 1800
+brassage_nuit_intelligent: false
+```
+
+While the pump is stopped, the daily target starts from this persisted representative temperature. Once circulation has run for the existing `tempo_eau` delay, the live target immediately uses the real water probe and can therefore correct itself for the current day. The persisted memory is refreshed progressively from valid physical measurements only; fail-safe substituted values are never averaged into it.
+
+`brassage_nuit_intelligent: false` only suppresses periodic night mixing in `Intelligent` mode. It does **not** disable `Hors Gel`: periodic freeze circulation and the optional continuous freeze fail-safe remain completely independent.
 
 ## Adaptive filtration target
 

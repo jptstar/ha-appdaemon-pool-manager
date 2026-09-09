@@ -1,0 +1,42 @@
+name: Publish v0.4.3
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/publish-v0.4.3.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create v0.4.3 release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view v0.4.3 >/dev/null 2>&1; then
+            echo "v0.4.3 already exists"
+            exit 0
+          fi
+          gh release create v0.4.3 \
+            --target c75eaf28a7ff65e106a9290a63d2dc51025001a2 \
+            --title "v0.4.3 - PAC automatic mode gate" \
+            --notes-file - <<'EOF'
+          ## Pool Manager v0.4.3
+
+          Add an optional Home Assistant master automatic-mode gate for Pool Manager's automatic PAC policy.
+
+          - New optional `entity_mode_auto` setting.
+          - With `entity_mode_auto` configured, automatic PAC start/stop decisions only run while that entity is `on`.
+          - Disabling auto mode aborts a pending pump-first PAC startup before `Heat` is commanded.
+          - Existing PAC state is not forcibly changed merely because auto mode is disabled.
+          - Heating override handling and PAC flow fail-safe remain active and independent.
+          - Omitting `entity_mode_auto` preserves previous behavior.
+          - Recommended migration from the former HA PAC automation: configure `entity_mode_auto: input_boolean.piscine_mode_auto` and `gestion_pac_auto: true`, then disable/remove the old automatic PAC automation after validation.
+          EOF

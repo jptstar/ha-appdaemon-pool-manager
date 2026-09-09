@@ -16,6 +16,13 @@ pool_manager:
   mem_temp: input_number.pool_water_temperature_memory
   arret_force: input_boolean.pool_force_stop
 
+  # Thermal reference used while the pump is stopped. Once water has circulated
+  # long enough, the live target uses the real probe immediately while mem_temp
+  # is updated as a slow moving representative value for the next stop/night.
+  temperature_reference_lissee: true
+  temperature_reference_alpha: 0.35
+  temperature_reference_min_update_s: 1800
+
   # Safety / fail-safe
   fail_safe_active: true
   temperature_eau_secours_c: 32
@@ -113,11 +120,21 @@ pool_manager:
   vitesse_rattrapage_palier_4: 85
   vitesse_max_complement_soir: 70
   vitesse_brassage_nuit: 35
+
+  # Intelligent mode no longer needs periodic night mixing just to refresh the
+  # water temperature. This does NOT disable periodic/continuous Hors Gel.
+  brassage_nuit_intelligent: false
+
   vitesse_max_maintien_faible: 60
   vitesse_max_maintien_faible_pac: 75
   vitesse_max_rattrapage_surplus_faible: 70
 
-  # Solar management
+  # Solar management. When suivre_soleil_reel is enabled, AppDaemon sunrise /
+  # sunset define the Intelligent filtration window. The fixed 09:00-18:00
+  # values remain the automatic fallback if sun data cannot be obtained.
+  suivre_soleil_reel: true
+  marge_apres_lever_soleil_min: 0
+  marge_avant_coucher_soleil_min: 0
   seuil_surplus_demarrage_w: 500
   seuil_surplus_arret_w: 250
   surplus_max_w: 900

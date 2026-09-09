@@ -5,6 +5,7 @@ import hassapi as hass
 
 from pool_common import *
 from pool_status import StatusMixin
+from pool_auto_gate import AutoModeGateMixin
 from pool_safety import SafetyMixin
 from pool_daylight import DaylightMixin
 from pool_lifecycle import LifecycleMixin
@@ -15,6 +16,7 @@ from pool_control import ControlMixin
 
 class FiltrationPiscine(
     StatusMixin,
+    AutoModeGateMixin,
     SafetyMixin,
     DaylightMixin,
     LifecycleMixin,

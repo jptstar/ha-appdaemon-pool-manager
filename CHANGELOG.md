@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1 - Cloudy-day catch-up fix
+
+- Allow Intelligent-mode daytime sanitary catch-up to start even when PV surplus is below the normal 500 W solar-start threshold.
+- Keep the PV threshold and stability delay mandatory for opportunistic solar-only starts.
+- Preserve the daylight gate: cloudy-day catch-up still cannot start before sunrise.
+- Add regression tests for zero-surplus daytime catch-up and the pre-sunrise block.
+
 ## 0.4.0 - Daylight-aware Intelligent mode
 
 - Use AppDaemon's real sunrise/sunset information for the main Intelligent filtration window when available; retain the configured fixed solar hours as an automatic fallback.

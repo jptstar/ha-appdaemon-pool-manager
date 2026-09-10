@@ -5,6 +5,7 @@ import hassapi as hass
 
 from pool_common import *
 from pool_status import StatusMixin
+from pool_heating import HeatingModeMixin
 from pool_auto_gate import AutoModeGateMixin
 from pool_safety import SafetyMixin
 from pool_daylight import DaylightMixin
@@ -16,6 +17,7 @@ from pool_control import ControlMixin
 
 class FiltrationPiscine(
     StatusMixin,
+    HeatingModeMixin,
     AutoModeGateMixin,
     SafetyMixin,
     DaylightMixin,
@@ -83,10 +85,9 @@ class FiltrationPiscine(
     def pac_besoin_chauffe(self):
         """Treat an explicit HA heating override as a heat-pump flow request.
 
-        Home Assistant remains responsible for the override timer and PAC
-        operating mode. Pool Manager only converts that policy signal into a
-        circulation requirement. With no configured override entity, behavior
-        remains identical to the previous release.
+        Home Assistant remains responsible for the legacy override timer and PAC
+        operating mode when `entity_derogation_chauffage` is configured. The new
+        single-selector heating policy is layered below this compatibility hook.
         """
         if self.derogation_chauffage_active():
             return True

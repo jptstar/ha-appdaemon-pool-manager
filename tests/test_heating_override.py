@@ -17,6 +17,9 @@ spec.loader.exec_module(module)
 def make_app(entity="input_boolean.pool_heating_override"):
     app = object.__new__(module.FiltrationPiscine)
     app.entity_derogation_chauffage = entity
+    # These unit tests bypass initialize(); mirror the optional new selector's
+    # unconfigured state so the legacy v0.2.x-v0.4.3 path remains testable.
+    app.entity_chauffage = None
     return app
 
 

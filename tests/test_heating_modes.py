@@ -1,8 +1,10 @@
 import importlib.util
+import sys
 from pathlib import Path
 
 
 MODULE_PATH = Path(__file__).parents[1] / "apps" / "pool_manager" / "pool_heating.py"
+sys.path.insert(0, str(MODULE_PATH.parent))
 spec = importlib.util.spec_from_file_location("pool_heating", MODULE_PATH)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)

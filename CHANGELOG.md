@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.4 - Unified heating modes
+
+- Add optional `entity_chauffage` support for one Home Assistant selector that centralizes all user-facing pool-heating policy.
+- Add `Désactivé`, `Automatique`, `Première chauffe • Smart`, `Fin de saison • Smart` and timed Turbo strategies.
+- Keep `Automatique` on the existing seasonal weather/window policy and continue respecting the optional `entity_mode_auto` gate.
+- Make `Première chauffe • Smart` establish pump flow first, run the PAC in `Heat/Smart`, then return the selector to `Automatique` when the measured water reaches the climate setpoint within the configured margin.
+- Make `Fin de saison • Smart` deliberately bypass the normal seasonal weather and 08:00-20:00 gate, keep `Heat/Smart` available 24/7 and maintain the minimum PAC circulation so the heat pump can preserve the requested water temperature during cold nights.
+- Add timed `Turbo` modes from 1 hour to 3 days. An optional Home Assistant timer provides persistence and an optional input-text helper stores the previous heating mode; without the HA timer AppDaemon falls back to an in-memory timer.
+- Restore the previous non-Turbo heating mode automatically when a Turbo timer finishes.
+- Keep forced stop, `Hors Gel` and PAC-flow fail-safe safety above every heating strategy.
+- Keep the legacy `entity_derogation_chauffage` path backward-compatible when the new selector is not configured.
+- Add regression tests and update the canonical AppDaemon example.
+
 ## 0.4.3 - PAC automatic mode gate
 
 - Add optional `entity_mode_auto` support for Home Assistant's master pool automatic-mode boolean.

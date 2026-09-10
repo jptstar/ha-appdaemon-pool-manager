@@ -9,8 +9,8 @@ pool_manager:
   # General mode / scheduling
   mode_de_fonctionnement: input_select.pool_operating_mode
   # Optional master switch for automatic policy. When configured, automatic
-  # PAC regulation is suspended unless this entity is on. Manual override and
-  # PAC flow fail-safe protection remain independent.
+  # PAC regulation is suspended unless this entity is on. Explicit heating
+  # modes (first heat, end of season, Turbo) remain intentional user commands.
   entity_mode_auto: input_boolean.pool_auto_mode
   h_pivot: input_datetime.pool_pivot_time
   duree_filtration_ete: input_number.pool_daily_filtration_target
@@ -57,9 +57,25 @@ pool_manager:
   entity_pac_conso: sensor.pool_heat_pump_power
   entity_pompe_conso: sensor.pool_pump_power
 
-  # Optional Home Assistant override signal. HA may still own the temporary
-  # override timer/preset; Pool Manager guarantees circulation for it.
-  entity_derogation_chauffage: input_boolean.pool_heating_override
+  # v0.4.4: one Home Assistant selector owns all user-facing heating policy.
+  # Supported options must match exactly:
+  # Désactivé / Automatique / Première chauffe • Smart / Fin de saison • Smart /
+  # Turbo • 1 h / 2 h / 3 h / 6 h / 12 h / 1 jour / 2 jours / 3 jours.
+  entity_chauffage: input_select.pool_heating
+
+  # Optional helpers make Turbo duration and the previous heating mode persistent.
+  # If the timer is omitted, AppDaemon uses an in-memory fallback timer.
+  entity_chauffage_timer: timer.pool_heating
+  entity_chauffage_precedent: input_text.pool_heating_previous
+
+  chauffage_preset_auto: Smart
+  chauffage_preset_smart: Smart
+  chauffage_preset_turbo: Turbo
+  chauffage_premiere_chauffe_marge_c: 0.3
+
+  # Legacy v0.2.x-v0.4.3 compatibility only. Do not configure this together with
+  # a new HA automation that also controls the v0.4.4 selector.
+  # entity_derogation_chauffage: input_boolean.pool_heating_override
 
   seuil_pac_veille_w: 200
   seuil_pac_silent_w: 500
@@ -71,7 +87,7 @@ pool_manager:
   # PAC automatic seasonal policy (opt-in for backwards compatibility).
   # Start sequence is always: pump -> >= minimum speed -> climate Heat.
   # Stop sequence is: climate Off -> post-circulation -> normal pump strategy.
-  # When entity_mode_auto is configured, this policy runs only while it is on.
+  # When entity_mode_auto is configured, only the Automatique strategy is gated.
   gestion_pac_auto: false
   heure_debut_pac_auto: "08:00:00"
   heure_fin_pac_auto: "20:00:00"

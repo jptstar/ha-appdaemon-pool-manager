@@ -13,6 +13,7 @@ class ControlMixin:
 
         mode = self.get_state(self.args["mode_de_fonctionnement"]).strip()
         self.mode_actif = mode
+        self.sync_local_panel_policy(mode)
 
         if self.arret_force_actif():
             self.turn_off_pompe_mem(force=True)
@@ -125,8 +126,9 @@ class ControlMixin:
                     if duree_stab.total_seconds() > 0:
                         if not self.pompe_est_on():
                             self.start_pump_with_delayed_speed(self.vitesse_mode_temperature, delay_s=2, context="stabilisation_temperature")
-                        else:
-                            self.set_pump_percentage(self.vitesse_mode_temperature)
+                        elif not self.mode_speed_initialized:
+                            self.set_pump_percentage(self.vitesse_mode_temperature, force=True)
+                            self.mode_speed_initialized = True
 
                         self.stabilisation_active = True
                         self.fin_stabilisation = now_dt + duree_stab
@@ -148,7 +150,14 @@ class ControlMixin:
                     self.set_debug_w("")
                     return
 
-                vitesse_appliquee = self.set_pump_percentage(self.vitesse_mode_temperature)
+                if not self.mode_speed_initialized:
+                    vitesse_appliquee = self.set_pump_percentage(self.vitesse_mode_temperature, force=True)
+                    self.mode_speed_initialized = True
+                else:
+                    vitesse_appliquee = self.get_fan_percentage()
+                    if vitesse_appliquee is None:
+                        vitesse_appliquee = self.derniere_vitesse_commande if self.derniere_vitesse_commande is not None else self.vitesse_mode_temperature
+
                 debit = self.debit_pompe(vitesse_appliquee)
                 self.set_messages(
                     f"Température | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",

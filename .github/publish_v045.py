@@ -2,48 +2,16 @@ from pathlib import Path
 import textwrap
 
 
-def replace_once(path: str, old: str, new: str) -> None:
-    target = Path(path)
-    text = target.read_text(encoding="utf-8")
-    if text.count(old) != 1:
-        raise SystemExit(f"Expected exactly one match in {path!r}, found {text.count(old)}")
-    target.write_text(text.replace(old, new, 1), encoding="utf-8")
+devices = Path("apps/pool_manager/pool_devices.py")
+text = devices.read_text(encoding="utf-8")
+start_marker = "    def set_pump_percentage(self, percentage, force=False):\n"
+end_marker = "\n    def pompe_est_on(self):\n"
+start = text.find(start_marker)
+end = text.find(end_marker, start)
+if start < 0 or end < 0:
+    raise SystemExit("Could not locate set_pump_percentage block")
 
-
-devices_old = textwrap.dedent('''\
-    def set_pump_percentage(self, percentage, force=False):
-        percentage = int(max(0, min(100, percentage)))
-        now = datetime.datetime.now()
-
-        current = self.get_fan_percentage()
-        if current is None:
-            current = self.derniere_vitesse_commande if self.derniere_vitesse_commande is not None else percentage
-
-        if not force and abs(percentage - current) < self.delta_vitesse_min:
-            return current
-
-        if not force and (now - self.last_changement_vitesse).total_seconds() < self.tempo_changement_vitesse:
-            return current
-
-        if not force:
-            if percentage > current:
-                percentage = min(current + self.pas_vitesse_max, percentage)
-            elif percentage < current:
-                percentage = max(current - self.pas_vitesse_max, percentage)
-
-        try:
-            self.call_service("fan/set_percentage", entity_id=self.args["fan_variateur_pompe"], percentage=percentage)
-            self.derniere_vitesse_commande = percentage
-            self.last_changement_vitesse = now
-            self.maj_electrolyseur()
-            return percentage
-        except Exception as e:
-            self.log(f"⚠️ Erreur set_percentage : {e}", log="piscine_log")
-            return current
-''')
-
-devices_new = textwrap.dedent('''\
-    def set_pump_percentage(self, percentage, force=False):
+new_block = '''    def set_pump_percentage(self, percentage, force=False):
         percentage = int(max(0, min(100, percentage)))
         now = datetime.datetime.now()
 
@@ -87,9 +55,8 @@ devices_new = textwrap.dedent('''\
         except Exception as e:
             self.log(f"⚠️ Erreur set_percentage : {e}", log="piscine_log")
             return current
-''')
-
-replace_once("apps/pool_manager/pool_devices.py", devices_old, devices_new)
+'''
+devices.write_text(text[:start] + new_block + text[end:], encoding="utf-8")
 
 control = Path("apps/pool_manager/pool_control.py")
 control_text = control.read_text(encoding="utf-8")

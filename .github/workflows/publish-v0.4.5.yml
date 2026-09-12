@@ -69,3 +69,5 @@ jobs:
           git rm .github/workflows/publish-v0.4.5.yml .github/publish_v045.py
           git commit -m "chore: remove v0.4.5 publisher"
           git push origin HEAD:main
+
+# retry after patcher fix

@@ -126,7 +126,7 @@ class ControlMixin:
                         if not self.pompe_est_on():
                             self.start_pump_with_delayed_speed(self.vitesse_mode_temperature, delay_s=2, context="stabilisation_temperature")
                         else:
-                            self.set_pump_percentage(self.vitesse_mode_temperature, force=True)
+                            self.set_pump_percentage(self.vitesse_mode_temperature)
 
                         self.stabilisation_active = True
                         self.fin_stabilisation = now_dt + duree_stab
@@ -148,7 +148,7 @@ class ControlMixin:
                     self.set_debug_w("")
                     return
 
-                vitesse_appliquee = self.set_pump_percentage(self.vitesse_mode_temperature, force=True)
+                vitesse_appliquee = self.set_pump_percentage(self.vitesse_mode_temperature)
                 debit = self.debit_pompe(vitesse_appliquee)
                 self.set_messages(
                     f"Température | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",

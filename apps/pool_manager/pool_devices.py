@@ -106,20 +106,35 @@ class DevicesMixin:
         now = datetime.datetime.now()
 
         current = self.get_fan_percentage()
-        if current is None:
-            current = self.derniere_vitesse_commande if self.derniere_vitesse_commande is not None else percentage
+        last_command = self.derniere_vitesse_commande
 
-        if not force and abs(percentage - current) < self.delta_vitesse_min:
-            return current
+        # Normal regulation compares the requested target with the last
+        # command emitted by Pool Manager, not with a manual fan change.
+        # This lets a user temporarily take over the pump speed while the
+        # automatic target itself remains unchanged.
+        if not force and last_command is not None:
+            if abs(percentage - last_command) < self.delta_vitesse_min:
+                return current if current is not None else last_command
 
         if not force and (now - self.last_changement_vitesse).total_seconds() < self.tempo_changement_vitesse:
-            return current
+            if current is not None:
+                return current
+            return last_command if last_command is not None else percentage
+
+        # Once the automatic target really changes, resume from the physical
+        # speed reported by Home Assistant so the existing ramp limit remains
+        # smooth even after a manual adjustment.
+        reference = current
+        if reference is None:
+            reference = last_command
+        if reference is None:
+            reference = percentage
 
         if not force:
-            if percentage > current:
-                percentage = min(current + self.pas_vitesse_max, percentage)
-            elif percentage < current:
-                percentage = max(current - self.pas_vitesse_max, percentage)
+            if percentage > reference:
+                percentage = min(reference + self.pas_vitesse_max, percentage)
+            elif percentage < reference:
+                percentage = max(reference - self.pas_vitesse_max, percentage)
 
         try:
             self.call_service("fan/set_percentage", entity_id=self.args["fan_variateur_pompe"], percentage=percentage)

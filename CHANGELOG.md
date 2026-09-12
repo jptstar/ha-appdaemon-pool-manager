@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.5 - Manual pump speed handoff
+
+- Send normal pump-speed commands only when Pool Manager's requested target changes by at least the configured delta, instead of repeatedly rewriting the currently expected speed.
+- Compare normal targets with the last speed command emitted by Pool Manager, so an unchanged automatic target does not immediately overwrite a manual speed adjustment made through Home Assistant or the pump integration.
+- When the automatic target really changes, resume control from the physical `fan.percentage` reported by Home Assistant and keep the existing ramp and minimum-delay limits.
+- Stop forcing repeated speed writes from the normal `Température` filtration path during periodic re-evaluation.
+- Keep forced speed commands for delayed pump startup and safety paths such as PAC minimum flow and freeze protection.
+- No YAML migration is required.
+- Add regression tests for manual handoff, automatic takeover on target change and forced safety commands.
+
 ## 0.4.4 - Unified heating modes
 
 - Add optional `entity_chauffage` support for one Home Assistant selector that centralizes all user-facing pool-heating policy.

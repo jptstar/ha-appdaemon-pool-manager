@@ -98,6 +98,12 @@ class LifecycleMixin:
         self.entity_pv_power = self.args.get("entity_pv_power")
         self.entity_debug_w = self.args.get("entity_debug_w")
 
+        # Optional integration-level local-panel handoff (for example Aquagem).
+        self.entity_pompe_local_panel_assist = self.args.get("entity_pompe_local_panel_assist")
+        self.entity_pompe_local_control_available = self.args.get("entity_pompe_local_control_available")
+        self.entity_pompe_local_control_remaining = self.args.get("entity_pompe_local_control_remaining")
+        self.mode_speed_initialized = False
+
         self.seuil_pac_veille_w = float(self.args["seuil_pac_veille_w"])
         self.seuil_pac_silent_w = float(self.args["seuil_pac_silent_w"])
         self.seuil_pac_smart_w = float(self.args["seuil_pac_smart_w"])
@@ -185,6 +191,12 @@ class LifecycleMixin:
 
         self.derniere_vitesse_commande = self.get_fan_percentage()
 
+        # On reload, do not disturb an already-running manual-capable mode.
+        mode_init = (self.get_state(self.args["mode_de_fonctionnement"]) or "").strip()
+        if self.pompe_est_on() and mode_init in [TAB_MODE[0], TAB_MODE[3]]:
+            self.mode_speed_initialized = True
+        self.sync_local_panel_policy(mode_init)
+
         self.listen_state(self.change_temp, self.args["temperature_eau"])
         self.listen_state(self.change_mode, self.args["mode_de_fonctionnement"])
         self.listen_state(self.change_coef, self.args["coef"])
@@ -242,6 +254,7 @@ class LifecycleMixin:
 
     def change_mode(self, entity, attribute, old, new, kwargs):
         self.fin_tempo = 0
+        self.mode_speed_initialized = False
         self.cancel_pending_start_sequence()
 
         self.stabilisation_active = False
@@ -271,6 +284,7 @@ class LifecycleMixin:
             if not ("arret_force" in self.args and self.get_state(self.args["arret_force"]) == "on"):
                 self.planifier_bras(0)
 
+        self.sync_local_panel_policy(new.strip())
         self.traitement(kwargs)
 
     def change_coef(self, entity, attribute, old, new, kwargs):
@@ -306,6 +320,7 @@ class LifecycleMixin:
         self.planifier_bras(0)
 
     def change_arret_force(self, entity, attribute, old, new, kwargs):
+        self.sync_local_panel_policy()
         if new == "on":
             self.turn_off_pompe_mem(force=True)
             self.stabilisation_active = False

@@ -106,35 +106,20 @@ class DevicesMixin:
         now = datetime.datetime.now()
 
         current = self.get_fan_percentage()
-        last_command = self.derniere_vitesse_commande
+        if current is None:
+            current = self.derniere_vitesse_commande if self.derniere_vitesse_commande is not None else percentage
 
-        # Normal regulation compares the requested target with the last
-        # command emitted by Pool Manager, not with a manual fan change.
-        # This lets a user temporarily take over the pump speed while the
-        # automatic target itself remains unchanged.
-        if not force and last_command is not None:
-            if abs(percentage - last_command) < self.delta_vitesse_min:
-                return current if current is not None else last_command
+        if not force and abs(percentage - current) < self.delta_vitesse_min:
+            return current
 
         if not force and (now - self.last_changement_vitesse).total_seconds() < self.tempo_changement_vitesse:
-            if current is not None:
-                return current
-            return last_command if last_command is not None else percentage
-
-        # Once the automatic target really changes, resume from the physical
-        # speed reported by Home Assistant so the existing ramp limit remains
-        # smooth even after a manual adjustment.
-        reference = current
-        if reference is None:
-            reference = last_command
-        if reference is None:
-            reference = percentage
+            return current
 
         if not force:
-            if percentage > reference:
-                percentage = min(reference + self.pas_vitesse_max, percentage)
-            elif percentage < reference:
-                percentage = max(reference - self.pas_vitesse_max, percentage)
+            if percentage > current:
+                percentage = min(current + self.pas_vitesse_max, percentage)
+            elif percentage < current:
+                percentage = max(current - self.pas_vitesse_max, percentage)
 
         try:
             self.call_service("fan/set_percentage", entity_id=self.args["fan_variateur_pompe"], percentage=percentage)
@@ -145,6 +130,34 @@ class DevicesMixin:
         except Exception as e:
             self.log(f"⚠️ Erreur set_percentage : {e}", log="piscine_log")
             return current
+
+    def sync_local_panel_policy(self, mode=None):
+        """Apply the optional pump-integration local-panel policy for this mode.
+
+        Température and Marche Forcée deliberately allow the integration's local
+        control assist. Intelligent and all safety-oriented modes keep remote
+        control authoritative.
+        """
+        entity = getattr(self, "entity_pompe_local_panel_assist", None)
+        if not entity:
+            return
+
+        if mode is None:
+            mode = (self.get_state(self.args["mode_de_fonctionnement"]) or "").strip()
+
+        allow_local = mode in [TAB_MODE[0], TAB_MODE[3]] and not self.arret_force_actif()
+        desired = "on" if allow_local else "off"
+        current = self.get_state(entity)
+        if current == desired:
+            return
+
+        try:
+            self.call_service(
+                "switch/turn_on" if allow_local else "switch/turn_off",
+                entity_id=entity,
+            )
+        except Exception as exc:
+            self.log(f"⚠️ Erreur politique panneau local pompe : {exc}", log="piscine_log")
 
     def pompe_est_on(self):
         return self.get_state(self.args["cde_pompe"]) == "on"
@@ -192,6 +205,7 @@ class DevicesMixin:
             self.last_pompe_off = datetime.datetime.now()
             self.derniere_vitesse_commande = None
 
+        self.mode_speed_initialized = False
         self.set_debug_w("")
 
     def apply_pending_stop_after_electrolyseur(self, kwargs):
@@ -346,6 +360,8 @@ class DevicesMixin:
 
         try:
             self.set_pump_percentage(percentage, force=True)
+            if ctx.get("context") in {"temperature", "stabilisation_temperature", "marche_forcee"}:
+                self.mode_speed_initialized = True
             self.maj_electrolyseur()
         finally:
             self.handle_apply_speed = None

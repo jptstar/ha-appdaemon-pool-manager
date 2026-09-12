@@ -48,6 +48,15 @@ pool_manager:
   cde_pompe: fan.pool_pump
   fan_variateur_pompe: fan.pool_pump
 
+  # Optional local-panel handoff exposed by the pump integration.
+  # Température / Marche Forcée: assist ON; Pool Manager sends the initial
+  # target once, then the local panel may take over after the integration's
+  # quiet timer expires. Intelligent / Hors Gel / Arrêt Forcé: assist OFF so
+  # automatic/safety control remains authoritative.
+  entity_pompe_local_panel_assist: switch.pool_pump_local_panel_assist
+  entity_pompe_local_control_available: binary_sensor.pool_pump_local_panel_control_available
+  entity_pompe_local_control_remaining: sensor.pool_pump_time_until_local_control
+
   message_filtration_piscine: input_text.pool_manager_status
   message_filtration_piscine_detail: input_text.pool_manager_status_detail
   entity_debug_w: input_text.pool_manager_power_debug

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.6 - Mode-aware local pump control
+
+- Revert the v0.4.5 last-command pump-speed ownership experiment after production feedback showed unexpected speed behavior, including an observed 100% / 2900 rpm condition.
+- Restore normal automatic speed regulation against the physical `fan.percentage` reported by Home Assistant.
+- Add optional pump-integration local-panel entities. `Température` and `Marche Forcée` enable local-control assist, while `Intelligent`, `Hors Gel` and `Arrêt Forcé` disable it so automatic and safety control remain authoritative.
+- In `Température`, send the configured speed once at mode/start initialization instead of rewriting it on every periodic evaluation; after the pump integration quiet timer expires, a user may change speed locally without Pool Manager immediately overwriting it.
+- Keep `Marche Forcée` non-intrusive after startup: it keeps the running speed and allows the local panel to take over when available.
+- Keep startup, PAC minimum-flow, freeze protection and explicit safety commands authoritative.
+- The local-panel integration entities are optional; installations without them keep previous generic fan behavior.
+
 ## 0.4.5 - Manual pump speed handoff
 
 - Send normal pump-speed commands only when Pool Manager's requested target changes by at least the configured delta, instead of repeatedly rewriting the currently expected speed.

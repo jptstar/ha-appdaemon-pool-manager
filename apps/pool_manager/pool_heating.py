@@ -5,6 +5,11 @@ import datetime
 from datetime import timedelta
 
 from pool_common import TAB_MODE
+from pool_end_season import (
+    build_end_season_plan,
+    extract_weather_forecast,
+    normalize_daily_forecast,
+)
 
 
 CHAUFFAGE_DESACTIVE = "Désactivé"
@@ -80,12 +85,75 @@ class HeatingModeMixin:
             self.args.get("chauffage_premiere_chauffe_marge_c", 0.3)
         )
 
+        # Predictive end-of-season planner is opt-in for backward compatibility.
+        # With it disabled, Fin de saison keeps the v0.4.4-v0.4.6 24/7 behavior.
+        self.fin_saison_predictif = str(
+            self.args.get("fin_saison_predictif", "false")
+        ).lower() == "true"
+        self.entity_meteo_fin_saison = self.args.get("entity_meteo_fin_saison")
+        self.fin_saison_horizon_jours = max(3, min(10, int(float(
+            self.args.get("fin_saison_horizon_jours", 10)
+        ))))
+        self.fin_saison_prevision_refresh_s = max(300, int(float(
+            self.args.get("fin_saison_prevision_refresh_s", 1800)
+        )))
+        self.fin_saison_prevision_max_age_s = max(
+            self.fin_saison_prevision_refresh_s,
+            int(float(self.args.get("fin_saison_prevision_max_age_s", 21600))),
+        )
+        self.fin_saison_temperature_baignade_min_c = float(
+            self.args.get("fin_saison_temperature_baignade_min_c", 21.0)
+        )
+        self.fin_saison_temperature_baignade_ideale_c = float(
+            self.args.get("fin_saison_temperature_baignade_ideale_c", 26.0)
+        )
+        self.fin_saison_score_baignade_min = float(
+            self.args.get("fin_saison_score_baignade_min", 55.0)
+        )
+        self.fin_saison_heure_baignade_cible = self.args.get(
+            "fin_saison_heure_baignade_cible", "16:00:00"
+        )
+        self.fin_saison_gain_chauffe_c_par_h = max(0.05, float(
+            self.args.get("fin_saison_gain_chauffe_c_par_h", 0.30)
+        ))
+        self.fin_saison_temperature_plancher_delta_c = max(0.0, float(
+            self.args.get("fin_saison_temperature_plancher_delta_c", 3.0)
+        ))
+        self.fin_saison_recharge_plancher_c = max(0.1, float(
+            self.args.get("fin_saison_recharge_plancher_c", 0.5)
+        ))
+        self.fin_saison_marge_arret_c = max(0.0, float(
+            self.args.get("fin_saison_marge_arret_c", 0.2)
+        ))
+        self.fin_saison_marge_planification_h = max(0.0, float(
+            self.args.get("fin_saison_marge_planification_h", 0.5)
+        ))
+        self.fin_saison_marge_derniere_occasion_h = max(
+            self.fin_saison_marge_planification_h,
+            float(self.args.get("fin_saison_marge_derniere_occasion_h", 1.0)),
+        )
+        self.fin_saison_heure_debut_chauffe = self.args.get(
+            "fin_saison_heure_debut_chauffe",
+            self.args.get("heure_debut_pac_auto", "08:00:00"),
+        )
+        self.fin_saison_heure_fin_chauffe = self.args.get(
+            "fin_saison_heure_fin_chauffe",
+            self.args.get("heure_fin_pac_auto", "20:00:00"),
+        )
+
         self.chauffage_mode_precedent = CHAUFFAGE_AUTO
         self.handle_chauffage_start = None
         self.chauffage_start_deadline = None
         self.chauffage_start_preset = None
         self.chauffage_start_label = None
         self.handle_turbo_fallback = None
+
+        self.fin_saison_forecast = []
+        self.fin_saison_forecast_at = None
+        self.fin_saison_heat_requested = False
+        self.fin_saison_heat_target_c = None
+        self.fin_saison_last_plan = None
+        self.fin_saison_last_log_signature = None
 
         super().initialize()
 
@@ -233,6 +301,15 @@ class HeatingModeMixin:
         elif old_kind == "turbo":
             self._cancel_turbo_timer()
 
+        if new_kind == "end_season" and self.fin_saison_predictif:
+            # Force a fresh forecast when the predictive strategy is selected.
+            self.fin_saison_forecast_at = None
+            self.fin_saison_last_log_signature = None
+        if old_kind == "end_season" and new_kind != "end_season":
+            self.fin_saison_heat_requested = False
+            self.fin_saison_heat_target_c = None
+            self.fin_saison_last_plan = None
+
         self._cancel_chauffage_start()
         self.safety_tick({})
 
@@ -361,6 +438,136 @@ class HeatingModeMixin:
             self._recover("chauffage_temperature")
         self._request_chauffage_start(self.chauffage_preset_smart, "première chauffe")
 
+    def _fin_saison_forecast_age_s(self):
+        if self.fin_saison_forecast_at is None:
+            return None
+        return max(0.0, (datetime.datetime.now() - self.fin_saison_forecast_at).total_seconds())
+
+    def _refresh_fin_saison_forecast(self):
+        """Fetch and cache Home Assistant daily forecasts for the predictive mode."""
+        if not self.entity_meteo_fin_saison:
+            self._fault(
+                "fin_saison_meteo",
+                "Fin de saison prédictif sans entity_meteo_fin_saison; maintien plancher uniquement",
+            )
+            return self.fin_saison_forecast
+
+        age = self._fin_saison_forecast_age_s()
+        if age is not None and age < self.fin_saison_prevision_refresh_s:
+            return self.fin_saison_forecast
+
+        try:
+            result = self.call_service(
+                "weather/get_forecasts",
+                entity_id=self.entity_meteo_fin_saison,
+                type="daily",
+                return_result=True,
+                hass_timeout=10,
+            )
+            raw = extract_weather_forecast(result, self.entity_meteo_fin_saison)
+            normalized = normalize_daily_forecast(
+                raw,
+                horizon_days=self.fin_saison_horizon_jours,
+                min_air_c=self.fin_saison_temperature_baignade_min_c,
+                ideal_air_c=self.fin_saison_temperature_baignade_ideale_c,
+            )
+            if not normalized:
+                raise ValueError("réponse météo sans prévisions daily")
+            self.fin_saison_forecast = normalized
+            self.fin_saison_forecast_at = datetime.datetime.now()
+            self._recover(
+                "fin_saison_meteo",
+                f"{len(normalized)} jours de prévision disponibles",
+            )
+            return self.fin_saison_forecast
+        except Exception as exc:
+            age = self._fin_saison_forecast_age_s()
+            if self.fin_saison_forecast and age is not None and age <= self.fin_saison_prevision_max_age_s:
+                self._fault(
+                    "fin_saison_meteo",
+                    f"prévision météo non actualisée ({exc}); cache {age / 3600.0:.1f} h utilisé",
+                )
+                return self.fin_saison_forecast
+            self.fin_saison_forecast = []
+            self._fault(
+                "fin_saison_meteo",
+                f"prévisions météo indisponibles ({exc}); maintien plancher uniquement",
+            )
+            return []
+
+    def _log_fin_saison_plan(self, plan, water, target):
+        candidate = plan.get("candidate") or {}
+        signature = (
+            bool(plan.get("should_heat")),
+            plan.get("heat_target_c"),
+            candidate.get("date"),
+            bool(candidate.get("last_chance")),
+            str(plan.get("reason") or ""),
+        )
+        if signature == self.fin_saison_last_log_signature:
+            return
+        self.fin_saison_last_log_signature = signature
+        try:
+            self.log(
+                f"Fin de saison prédictif: eau {water:.1f}/{target:.1f} °C | "
+                f"{plan.get('reason', '')}",
+                log="piscine_log",
+            )
+        except Exception:
+            pass
+
+    def _manage_fin_saison_predictif(self):
+        """Heat only when needed for a likely bathing window over 7-10 days."""
+        water = self._premiere_chauffe_temperature()
+        target = self._pac_target_temperature()
+        if water is None or target is None:
+            self.fin_saison_heat_requested = False
+            self.fin_saison_heat_target_c = None
+            self._cancel_chauffage_start()
+            self._fault(
+                "fin_saison_temperature",
+                "température eau/consigne PAC indisponible; chauffage prédictif arrêté",
+            )
+            return self._pac_off("fin de saison prédictif: température indisponible")
+        self._recover("fin_saison_temperature")
+
+        forecast = self._refresh_fin_saison_forecast()
+        plan = build_end_season_plan(
+            now=datetime.datetime.now(),
+            water_c=water,
+            target_c=target,
+            forecast=forecast,
+            score_min=self.fin_saison_score_baignade_min,
+            min_air_c=self.fin_saison_temperature_baignade_min_c,
+            swim_time=self.fin_saison_heure_baignade_cible,
+            heating_rate_c_per_h=self.fin_saison_gain_chauffe_c_par_h,
+            floor_delta_c=self.fin_saison_temperature_plancher_delta_c,
+            maintenance_band_c=self.fin_saison_recharge_plancher_c,
+            stop_margin_c=self.fin_saison_marge_arret_c,
+            safety_margin_h=self.fin_saison_marge_planification_h,
+            last_chance_margin_h=self.fin_saison_marge_derniere_occasion_h,
+            heating_window_start=self.fin_saison_heure_debut_chauffe,
+            heating_window_end=self.fin_saison_heure_fin_chauffe,
+        )
+        self.fin_saison_last_plan = plan
+        self._log_fin_saison_plan(plan, water, target)
+
+        if plan.get("should_heat"):
+            self.fin_saison_heat_requested = True
+            self.fin_saison_heat_target_c = plan.get("heat_target_c") or target
+            return self._request_chauffage_start(
+                self.chauffage_preset_smart,
+                "fin de saison prédictif",
+            )
+
+        self.fin_saison_heat_requested = False
+        self.fin_saison_heat_target_c = None
+        self._cancel_chauffage_start()
+        return self._pac_off(
+            f"fin de saison prédictif: {plan.get('reason', 'attente')}",
+            post=True,
+        )
+
     def _manage_pac_auto(self):
         # No new selector configured: strict backwards compatibility.
         if not self.entity_chauffage:
@@ -400,11 +607,19 @@ class HeatingModeMixin:
         if kind == "first_heat":
             return self._manage_premiere_chauffe()
         if kind == "end_season":
+            if self.fin_saison_predictif:
+                return self._manage_fin_saison_predictif()
             return self._request_chauffage_start(self.chauffage_preset_smart, "fin de saison")
         if kind == "turbo":
             return self._request_chauffage_start(self.chauffage_preset_turbo, "Turbo")
 
     def pac_besoin_chauffe(self):
-        if self.entity_chauffage and self.chauffage_mode_explicite():
-            return True
+        if self.entity_chauffage:
+            kind = chauffage_mode_kind(self.chauffage_mode())
+            if kind in {"first_heat", "turbo"}:
+                return True
+            if kind == "end_season":
+                if not self.fin_saison_predictif:
+                    return True
+                return bool(self.fin_saison_heat_requested)
         return super().pac_besoin_chauffe()

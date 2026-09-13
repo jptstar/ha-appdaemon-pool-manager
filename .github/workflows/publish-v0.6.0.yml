@@ -1,0 +1,49 @@
+name: Publish v0.6.0
+
+on:
+  push:
+    paths:
+      - .github/workflows/publish-v0.6.0.yml
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > /tmp/release-notes.md <<'EOF'
+          Pool Manager v0.6.0 promotes predictive heating to a common weather-aware engine for the whole pool season.
+
+          - `Automatique` and `Fin de saison • Smart` now share the same 7–10 day predictive planner with different thermal-reserve profiles.
+          - `Début de saison • Smart` replaces the recommended `Première chauffe • Smart` wording and automatically returns to `Automatique` after reaching the setpoint; the old wording remains accepted for migration.
+          - Bathing opportunities are scored from forecast temperature, sun/cloud conditions, precipitation and wind, with `🏊` last-opportunity detection.
+          - Heating is planned primarily on the previous day and targets water ready by 11:00 by default, with bathing-day morning used as a top-up window.
+          - Warm/sunny heating quality can shift a limited part of a large recovery to a clearly better earlier day while keeping most heat close to the bathing day.
+          - Long poor-weather periods no longer imply full-setpoint maintenance: `Automatique` keeps a tighter reserve while `Fin de saison` allows a larger drift.
+          - Real PAC heating performance in °C/h is learned from real heating cycles in broad outdoor-temperature buckets and blended into future schedules.
+          - While the pump is stopped, predictive decisions prefer the persisted thermal-reference temperature instead of blindly trusting a potentially stale pipe probe.
+          - An optional virtual Home Assistant sensor exposes forecast rows, `🏊` / `🔥` / `⏸` markers, ready-by time, heating slots, reserve floor and PAC-rate diagnostics for Mushroom dashboards.
+          - v0.5 `fin_saison_*` settings remain accepted as migration aliases.
+          - Forced stop, Hors Gel, pump-first PAC flow confirmation, PAC-flow fail-safe and post-circulation remain higher priority than predictive decisions.
+
+          Home Assistant daily forecasts are read through `weather.get_forecasts`; AppDaemon 4.5+ is recommended for service-response support.
+          EOF
+          gh release create v0.6.0 --target 7e11100685744380543408367c0ee53bc63e0d1d --title "v0.6.0 - Season-wide predictive heating" --notes-file /tmp/release-notes.md
+
+      - name: Remove one-shot publisher
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main
+          git rm .github/workflows/publish-v0.6.0.yml
+          git commit -m "chore: remove v0.6.0 publisher"
+          git push origin HEAD:main

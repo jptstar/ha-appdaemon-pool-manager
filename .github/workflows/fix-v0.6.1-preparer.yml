@@ -23,65 +23,52 @@ jobs:
 
           path = Path('.github/workflows/prepare-v0.6.1.yml')
           text = path.read_text()
-          start = text.index("          old_horizon = '''")
-          end_marker = '''          replace_once(
-              runtime,
-              '            "next_swim_score": candidate.get("score"),'''
-          end = text.index(end_marker, start)
+          needle = '          replace_once(runtime, old_horizon, new_horizon)\n'
+          if text.count(needle) != 1:
+              raise RuntimeError(f'preparer needle count={text.count(needle)}')
 
-          replacement = '''          runtime_text = Path(runtime).read_text()
-          old = ''' + '"""' + '''        self.chauffage_predictif_horizon_jours = max(
-            3,
-            min(
-                10,
-                int(
-                    float(
-                        self._predictive_arg(
-                            "chauffage_predictif_horizon_jours",
-                            "fin_saison_horizon_jours",
-                            10,
-                        )
-                    )
-                ),
-            ),
-        )
-''' + '"""' + '''
-          new = ''' + '"""' + '''        self.chauffage_predictif_horizon_jours = max(
-            3,
-            min(
-                15,
-                int(
-                    float(
-                        self._predictive_arg(
-                            "chauffage_predictif_horizon_jours",
-                            "fin_saison_horizon_jours",
-                            15,
-                        )
-                    )
-                ),
-            ),
-        )
-        self.chauffage_predictif_horizon_operationnel_jours = max(
-            1,
-            min(
-                7,
-                int(
-                    float(
-                        self.args.get(
-                            "chauffage_predictif_horizon_operationnel_jours",
-                            3,
-                        )
-                    )
-                ),
-            ),
-        )
-''' + '"""' + '''
-          if runtime_text.count(old) != 1:
-              raise RuntimeError(f"runtime horizon block count={runtime_text.count(old)}")
-          Path(runtime).write_text(runtime_text.replace(old, new, 1))
-
-'''
-          path.write_text(text[:start] + replacement + text[end:])
+          lines = [
+              '          runtime_text = Path(runtime).read_text()',
+              '          start_marker = "        self.chauffage_predictif_horizon_jours = max(\\n"',
+              '          end_marker = "        self.chauffage_predictif_prevision_refresh_s = max(\\n"',
+              '          start = runtime_text.index(start_marker)',
+              '          end = runtime_text.index(end_marker, start)',
+              '          block_lines = [',
+              '              "        self.chauffage_predictif_horizon_jours = max(",',
+              '              "            3,",',
+              '              "            min(",',
+              '              "                15,",',
+              '              "                int(",',
+              '              "                    float(",',
+              '              "                        self._predictive_arg(",',
+              '              "                            \\\"chauffage_predictif_horizon_jours\\\",",',
+              '              "                            \\\"fin_saison_horizon_jours\\\",",',
+              '              "                            15,",',
+              '              "                        )",',
+              '              "                    )",',
+              '              "                ),",',
+              '              "            ),",',
+              '              "        )",',
+              '              "        self.chauffage_predictif_horizon_operationnel_jours = max(",',
+              '              "            1,",',
+              '              "            min(",',
+              '              "                7,",',
+              '              "                int(",',
+              '              "                    float(",',
+              '              "                        self.args.get(",',
+              '              "                            \\\"chauffage_predictif_horizon_operationnel_jours\\\",",',
+              '              "                            3,",',
+              '              "                        )",',
+              '              "                    )",',
+              '              "                ),",',
+              '              "            ),",',
+              '              "        )",',
+              '          ]',
+              '          new_block = "\\n".join(block_lines) + "\\n"',
+              '          Path(runtime).write_text(runtime_text[:start] + new_block + runtime_text[end:])',
+          ]
+          replacement = '\n'.join(lines) + '\n'
+          path.write_text(text.replace(needle, replacement, 1))
           PY
 
       - name: Commit preparer fix

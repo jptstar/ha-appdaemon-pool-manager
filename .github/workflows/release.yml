@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: startsWith(github.event.head_commit.message, 'Release v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate Python
+        run: |
+          python -m pip install pytest
+          python -m py_compile apps/pool_manager/*.py
+          pytest -q
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        shell: bash
+        run: |
+          version="$(printf '%s\n' "$COMMIT_MESSAGE" | head -n 1 | sed -n 's/^Release \(v[0-9][0-9.]*\).*$/\1/p')"
+          if [ -z "$version" ]; then
+            echo "Release version not found in commit message"
+            exit 1
+          fi
+
+          if gh release view "$version" >/dev/null 2>&1; then
+            echo "Release $version already exists"
+            exit 0
+          fi
+
+          notes_file="docs/${version}-RELEASE.md"
+          if [ -f "$notes_file" ]; then
+            gh release create "$version" --target "$GITHUB_SHA" --title "$version" --notes-file "$notes_file"
+          else
+            gh release create "$version" --target "$GITHUB_SHA" --title "$version" --generate-notes
+          fi

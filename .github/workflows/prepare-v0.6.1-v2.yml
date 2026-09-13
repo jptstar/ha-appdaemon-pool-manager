@@ -1,0 +1,431 @@
+name: Prepare v0.6.1 v2
+
+on:
+  push:
+    paths:
+      - .github/workflows/prepare-v0.6.1-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Apply v0.6.1 changes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f"{path}: expected one occurrence, found {count}: {old[:80]!r}")
+              p.write_text(text.replace(old, new, 1))
+
+          def regex_once(path, pattern, replacement):
+              p = Path(path)
+              text = p.read_text()
+              new_text, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
+              if count != 1:
+                  raise RuntimeError(f"{path}: regex did not match exactly once: {pattern}")
+              p.write_text(new_text)
+
+          predictive = "apps/pool_manager/pool_predictive.py"
+          runtime = "apps/pool_manager/pool_predictive_runtime.py"
+
+          normalize_block = '''def forecast_horizon_profile(index):
+              """Return confidence/weight for the 15-day strategic outlook."""
+              index = max(0, int(index))
+              if index <= 3:
+                  return {"confidence": "strong", "weight": 1.00}
+              if index <= 7:
+                  return {"confidence": "medium", "weight": 0.95}
+              if index <= 10:
+                  return {"confidence": "trend", "weight": 0.85}
+              return {"confidence": "indicative", "weight": 0.70}
+
+
+          def normalize_daily_forecast(
+              raw_forecast,
+              horizon_days=15,
+              min_air_c=21.0,
+              ideal_air_c=26.0,
+          ):
+              """Normalize Home Assistant daily forecast entries up to 15 days.
+
+              Raw weather quality remains visible as ``score``. ``strategic_score``
+              applies a distance-confidence weight so far forecasts can inform the
+              outlook without being treated as equally certain as J0-J3.
+              """
+              result = []
+              limit = max(1, min(15, int(horizon_days)))
+              for index, raw in enumerate(list(raw_forecast or [])[:limit]):
+                  if not isinstance(raw, dict):
+                      continue
+                  item = dict(raw)
+                  raw_score = swim_day_score(
+                      item,
+                      min_air_c=min_air_c,
+                      ideal_air_c=ideal_air_c,
+                  )
+                  profile = forecast_horizon_profile(index)
+                  item["score"] = raw_score
+                  item["strategic_score"] = round(raw_score * profile["weight"], 1)
+                  item["horizon_weight"] = profile["weight"]
+                  item["confidence"] = profile["confidence"]
+                  item["forecast_index"] = index
+                  item["heating_quality"] = heating_day_quality(item)
+                  parsed = _parse_datetime(item.get("datetime"))
+                  item["date"] = parsed.date() if parsed is not None else None
+                  result.append(item)
+              return result
+          '''
+          regex_once(
+              predictive,
+              r"def normalize_daily_forecast\([\s\S]*?\n\ndef extract_weather_forecast",
+              normalize_block + "\n\ndef extract_weather_forecast",
+          )
+
+          opportunities_block = '''def find_swim_opportunities(
+              forecast,
+              now,
+              score_min=55.0,
+              min_air_c=21.0,
+              swim_time="16:00:00",
+          ):
+              """Return credible bathing opportunities using distance weighting."""
+              score_min = float(score_min)
+              min_air_c = float(min_air_c)
+              opportunities = []
+
+              for index, day in enumerate(forecast or []):
+                  date_value = day.get("date")
+                  if date_value is None:
+                      date_value = now.date() + datetime.timedelta(days=index)
+                  swim_datetime = _combine(
+                      date_value,
+                      swim_time,
+                      now.tzinfo,
+                      default="16:00:00",
+                  )
+                  temperature = _number(day.get("temperature"))
+                  raw_score = _number(day.get("score")) or 0.0
+                  profile = forecast_horizon_profile(index)
+                  strategic_score = _number(day.get("strategic_score"))
+                  if strategic_score is None:
+                      strategic_score = raw_score * profile["weight"]
+                  confidence = day.get("confidence") or profile["confidence"]
+                  horizon_weight = _number(day.get("horizon_weight"))
+                  if horizon_weight is None:
+                      horizon_weight = profile["weight"]
+
+                  if swim_datetime <= now:
+                      continue
+                  if (
+                      temperature is None
+                      or temperature < min_air_c
+                      or strategic_score < score_min
+                  ):
+                      continue
+
+                  bad_streak = 0
+                  for relative, following in enumerate(
+                      (forecast or [])[index + 1 : index + 4], start=1
+                  ):
+                      following_index = index + relative
+                      f_temp = _number(following.get("temperature"))
+                      f_raw_score = _number(following.get("score")) or 0.0
+                      f_profile = forecast_horizon_profile(following_index)
+                      f_strategic_score = _number(following.get("strategic_score"))
+                      if f_strategic_score is None:
+                          f_strategic_score = f_raw_score * f_profile["weight"]
+                      if (
+                          f_temp is not None
+                          and f_temp >= min_air_c
+                          and f_strategic_score >= score_min
+                      ):
+                          break
+                      bad_streak += 1
+
+                  opportunities.append(
+                      {
+                          "index": index,
+                          "date": date_value,
+                          "swim_datetime": swim_datetime,
+                          "temperature": temperature,
+                          "score": raw_score,
+                          "strategic_score": round(float(strategic_score), 1),
+                          "horizon_weight": round(float(horizon_weight), 2),
+                          "confidence": confidence,
+                          "condition": day.get("condition"),
+                          "bad_streak_after": bad_streak,
+                          "last_chance": bad_streak >= 2,
+                      }
+                  )
+
+              return opportunities
+          '''
+          regex_once(
+              predictive,
+              r"def find_swim_opportunities\([\s\S]*?\n\ndef ambient_bin",
+              opportunities_block + "\n\ndef ambient_bin",
+          )
+
+          replace_once(
+              predictive,
+              '    morning_start="07:00:00",\n):\n    """Build one season-wide predictive heating decision."""',
+              '    morning_start="07:00:00",\n    operational_horizon_days=3,\n):\n    """Build one season-wide predictive heating decision."""',
+          )
+          replace_once(
+              predictive,
+              '    stop_margin_c = max(0.0, float(stop_margin_c))\n\n    opportunities = find_swim_opportunities(',
+              '    stop_margin_c = max(0.0, float(stop_margin_c))\n    operational_horizon_days = max(1, min(10, int(operational_horizon_days)))\n\n    opportunities = find_swim_opportunities(',
+          )
+          replace_once(
+              predictive,
+              '        "ready_datetime": None,\n        "reason": "",\n    }',
+              '        "ready_datetime": None,\n        "operational_horizon_days": operational_horizon_days,\n        "reason": "",\n    }',
+          )
+          replace_once(
+              predictive,
+              '    candidate["ready_datetime"] = ready_datetime\n    base["ready_datetime"] = ready_datetime\n\n    deficit = max(0.0, target_c - water_c)',
+              '''    candidate["ready_datetime"] = ready_datetime
+              base["ready_datetime"] = ready_datetime
+
+              candidate_index = int(candidate.get("index") or 0)
+              if candidate_index > operational_horizon_days:
+                  confidence = (
+                      candidate.get("confidence")
+                      or forecast_horizon_profile(candidate_index)["confidence"]
+                  )
+                  if water_c < floor_c and _inside_window(
+                      now,
+                      previous_day_start,
+                      previous_day_end,
+                  ):
+                      base.update(
+                          should_heat=True,
+                          heat_target_c=round(maintenance_target, 2),
+                          reason=(
+                              f"tendance {confidence} J+{candidate_index}; "
+                              f"recharge réserve vers {maintenance_target:.1f} °C"
+                          ),
+                      )
+                  else:
+                      base["reason"] = (
+                          f"tendance {confidence} J+{candidate_index}; observation 15 j, "
+                          f"planification opérationnelle à J+{operational_horizon_days}"
+                      )
+                  return base
+
+              deficit = max(0.0, target_c - water_c)''',
+          )
+          replace_once(
+              predictive,
+              '                "score": _number(day.get("score")) or 0.0,\n                "heating_quality": _number(day.get("heating_quality")) or 0.0,',
+              '                "score": _number(day.get("score")) or 0.0,\n                "strategic_score": _number(day.get("strategic_score")) or 0.0,\n                "horizon_weight": _number(day.get("horizon_weight")) or 1.0,\n                "confidence": day.get("confidence") or forecast_horizon_profile(index)["confidence"],\n                "operational": index <= int((plan or {}).get("operational_horizon_days") or 3),\n                "heating_quality": _number(day.get("heating_quality")) or 0.0,',
+          )
+
+          runtime_text = Path(runtime).read_text()
+          start_marker = '        self.chauffage_predictif_horizon_jours = max(\n'
+          end_marker = '        self.chauffage_predictif_prevision_refresh_s = max(\n'
+          start = runtime_text.index(start_marker)
+          end = runtime_text.index(end_marker, start)
+          block_lines = [
+              '        self.chauffage_predictif_horizon_jours = max(',
+              '            3,',
+              '            min(',
+              '                15,',
+              '                int(',
+              '                    float(',
+              '                        self._predictive_arg(',
+              '                            "chauffage_predictif_horizon_jours",',
+              '                            "fin_saison_horizon_jours",',
+              '                            15,',
+              '                        )',
+              '                    )',
+              '                ),',
+              '            ),',
+              '        )',
+              '        self.chauffage_predictif_horizon_operationnel_jours = max(',
+              '            1,',
+              '            min(',
+              '                7,',
+              '                int(',
+              '                    float(',
+              '                        self.args.get(',
+              '                            "chauffage_predictif_horizon_operationnel_jours",',
+              '                            3,',
+              '                        )',
+              '                    )',
+              '                ),',
+              '            ),',
+              '        )',
+          ]
+          new_block = '\n'.join(block_lines) + '\n'
+          Path(runtime).write_text(runtime_text[:start] + new_block + runtime_text[end:])
+
+          replace_once(
+              runtime,
+              '            "next_swim_score": candidate.get("score"),\n            "next_swim_condition": candidate.get("condition"),',
+              '            "next_swim_score": candidate.get("score"),\n            "next_swim_strategic_score": candidate.get("strategic_score"),\n            "next_swim_confidence": candidate.get("confidence"),\n            "next_swim_condition": candidate.get("condition"),\n            "forecast_horizon_days": self.chauffage_predictif_horizon_jours,\n            "operational_horizon_days": self.chauffage_predictif_horizon_operationnel_jours,',
+          )
+          replace_once(
+              runtime,
+              '            morning_start=self.chauffage_predictif_matin_debut,\n        )',
+              '            morning_start=self.chauffage_predictif_matin_debut,\n            operational_horizon_days=self.chauffage_predictif_horizon_operationnel_jours,\n        )',
+          )
+
+          tests = Path("tests/test_predictive_heating.py")
+          text = tests.read_text().replace(
+              'return module.normalize_daily_forecast(raw, horizon_days=10)',
+              'return module.normalize_daily_forecast(raw, horizon_days=15)',
+              1,
+          )
+          text += '''
+
+          def test_fifteen_day_forecast_keeps_distant_outlook_with_lower_confidence():
+              now = datetime.datetime(2026, 9, 13, 10, 0)
+              specs = [(27, "sunny", 0, 5)] * 15
+              forecast = _forecast(now, specs)
+              assert len(forecast) == 15
+              assert forecast[2]["confidence"] == "strong"
+              assert forecast[6]["confidence"] == "medium"
+              assert forecast[9]["confidence"] == "trend"
+              assert forecast[12]["confidence"] == "indicative"
+              assert forecast[2]["strategic_score"] > forecast[12]["strategic_score"]
+
+
+          def test_distant_indicative_swim_day_does_not_trigger_full_heating():
+              now = datetime.datetime(2026, 9, 13, 10, 0)
+              specs = [(16, "rainy", 90, 20)] * 15
+              specs[12] = (28, "sunny", 0, 5)
+              forecast = _forecast(now, specs)
+              plan = module.build_predictive_plan(
+                  now=now,
+                  water_c=29.0,
+                  target_c=30.0,
+                  forecast=forecast,
+                  heating_rate_c_per_h=0.30,
+                  floor_delta_c=2.0,
+                  operational_horizon_days=3,
+              )
+              assert plan["candidate"] is not None
+              assert plan["candidate"]["index"] == 12
+              assert plan["candidate"]["confidence"] == "indicative"
+              assert plan["should_heat"] is False
+              assert plan["schedule"] == []
+              assert "observation 15 j" in plan["reason"]
+          '''
+          tests.write_text(text)
+
+          replace_once(
+              "examples/filtration_piscine.yaml",
+              '  chauffage_predictif_horizon_jours: 10\n',
+              '  chauffage_predictif_horizon_jours: 15\n  chauffage_predictif_horizon_operationnel_jours: 3\n',
+          )
+
+          readme = Path("README.md")
+          text = readme.read_text()
+          text = text.replace(
+              'chauffage_predictif_horizon_jours: 10\n',
+              'chauffage_predictif_horizon_jours: 15\nchauffage_predictif_horizon_operationnel_jours: 3\n',
+              1,
+          )
+          text = text.replace(
+              'The engine asks Home Assistant for daily forecasts with `weather.get_forecasts`, scores each day from forecast high temperature, sun/cloud condition, rain probability/amount and wind, and marks the next credible bathing opportunity.',
+              'The engine asks Home Assistant for daily forecasts with `weather.get_forecasts` and keeps up to 15 days when the provider supplies them. Forecast confidence is distance-weighted: J0-J3 is strong, J4-J7 medium, J8-J10 trend-level and J11-J15 indicative. It scores each day from forecast high temperature, sun/cloud condition, rain probability/amount and wind, and marks the next credible bathing opportunity.',
+              1,
+          )
+          text = text.replace(
+              'Heating is planned **before** the swimming day. By default the water is targeted to be ready at 11:00, while the main heating window is the previous day from 12:00 to 20:00.',
+              'Heating is planned **before** the swimming day, but full comfort scheduling is intentionally limited to the operational horizon (`chauffage_predictif_horizon_operationnel_jours`, 3 days by default). More distant opportunities are strategic outlook only and cannot trigger a large immediate recovery. By default the water is targeted to be ready at 11:00, while the main heating window is the previous day from 12:00 to 20:00.',
+              1,
+          )
+          text = text.replace(
+              'Its attributes include the 7-10 day forecast rows, bathing score, `swim` marker, heating slots, next heating start/end, ready-by time, dynamic floor, estimated heating rate and learned rate buckets.',
+              'Its attributes include up to 15 forecast rows, raw and distance-weighted bathing scores, confidence tier, `swim` marker, heating slots, next heating start/end, ready-by time, dynamic floor, estimated heating rate and learned rate buckets.',
+              1,
+          )
+          readme.write_text(text)
+
+          changelog = Path("CHANGELOG.md")
+          text = changelog.read_text()
+          marker = '# Changelog\n\n'
+          entry = '''## 0.6.1 - 15-day strategic weather outlook
+
+          - Extend predictive weather ingestion from 10 to 15 days when the configured Home Assistant provider supplies that range.
+          - Add distance-confidence weighting: J0-J3 strong, J4-J7 medium, J8-J10 trend, J11-J15 indicative.
+          - Keep the raw bathing score while exposing a new `strategic_score`, `horizon_weight` and `confidence` tier in forecast diagnostics.
+          - Add a 3-day operational planning horizon by default so distant forecasts can inform strategy without triggering large immediate heating expenditure.
+          - Continue reserve-floor maintenance while a distant opportunity is only being observed; full comfort recovery is planned once it enters the operational horizon.
+          - Expose forecast/operational horizon values and next-swim confidence in the predictive Home Assistant sensor.
+
+          '''
+          if marker not in text:
+              raise RuntimeError('CHANGELOG header not found')
+          changelog.write_text(text.replace(marker, marker + entry, 1))
+
+          replace_once(
+              "examples/mushroom_predictive_heating.yaml",
+              "{% for d in (state_attr(e, 'forecast') or [])[:7] %}",
+              "{% for d in (state_attr(e, 'forecast') or [])[:15] %}",
+          )
+
+          mushroom_doc = Path("docs/MUSHROOM-PREDICTIVE-HEATING.md")
+          text = mushroom_doc.read_text()
+          text = text.replace(
+              '- `🏊` means the day selected as the next likely bathing opportunity;\n',
+              '- `🏊` means the day selected as the next likely bathing opportunity;\n- forecast rows can now span up to 15 days and expose `strategic_score`, `horizon_weight`, `confidence` and `operational`;\n',
+              1,
+          )
+          mushroom_doc.write_text(text)
+
+          Path("docs/V0.6.1-15-DAY-OUTLOOK.md").write_text('''# v0.6.1 — 15-day strategic weather outlook
+
+          v0.6.1 separates **weather visibility** from **heating commitment**.
+
+          - Up to 15 daily forecasts are retained when Home Assistant provides them.
+          - J0-J3: strong confidence and operational planning.
+          - J4-J7: medium-confidence strategic outlook.
+          - J8-J10: trend-level outlook.
+          - J11-J15: indicative only.
+
+          The distance weighting is applied to the bathing opportunity score, while the raw score remains available for diagnostics. By default, full setpoint recovery is not scheduled until an opportunity enters the 3-day operational horizon. A distant attractive forecast can therefore be displayed as `🏊` without causing immediate multi-day heating. Reserve-floor protection remains active.
+
+          Configuration:
+
+          ```yaml
+          chauffage_predictif_horizon_jours: 15
+          chauffage_predictif_horizon_operationnel_jours: 3
+          ```
+
+          The predictive status sensor also exposes `next_swim_strategic_score`, `next_swim_confidence`, `forecast_horizon_days`, `operational_horizon_days`, and per-day `strategic_score`, `horizon_weight`, `confidence`, `operational` attributes.
+          ''')
+          PY
+
+      - name: Run regression tests
+        run: |
+          python -m pip install pytest
+          python -m py_compile apps/pool_manager/*.py
+          pytest -q
+
+      - name: Commit v0.6.1 changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md README.md apps/pool_manager/pool_predictive.py apps/pool_manager/pool_predictive_runtime.py tests/test_predictive_heating.py examples/filtration_piscine.yaml examples/mushroom_predictive_heating.yaml docs/MUSHROOM-PREDICTIVE-HEATING.md docs/V0.6.1-15-DAY-OUTLOOK.md
+          git commit -m "release: v0.6.1 15-day predictive outlook"
+          git push origin HEAD:main

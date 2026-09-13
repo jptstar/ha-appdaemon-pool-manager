@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.0 - Predictive end-of-season heating
+
+- Add an opt-in predictive strategy for `Fin de saison • Smart` so the pump/PAC no longer need to remain available 24/7 merely to preserve the setpoint.
+- Read Home Assistant daily weather forecasts with `weather.get_forecasts` and use up to a 10-day strategic horizon, limited by the number of days the configured provider actually supplies.
+- Score likely bathing opportunities from forecast high temperature, sun/cloud condition, precipitation probability/amount and wind.
+- Detect a good day followed by several poor days as a likely last bathing opportunity and give it additional scheduling margin.
+- Work backwards from a configurable bathing time and measured/estimated PAC heating rate, placing required heating hours as late as possible in a preferred daytime window.
+- Avoid needless overnight heating when a warm/sunny next day still provides enough time to recover the requested water temperature; start earlier, including overnight, only when required to meet the bathing deadline.
+- When no credible bathing window is visible, maintain only a configurable recovery floor instead of the full PAC setpoint.
+- Cache forecasts, tolerate a temporary refresh failure with a bounded stale cache, and fall back to recovery-floor behavior when forecast response data is unavailable.
+- Keep legacy 24/7 `Fin de saison` behavior unchanged unless `fin_saison_predictif: true` is explicitly configured.
+- Keep forced stop, Hors Gel and PAC minimum-flow fail-safes above the predictive planner.
+
 ## 0.4.6 - Mode-aware local pump control
 
 - Revert the v0.4.5 last-command pump-speed ownership experiment after production feedback showed unexpected speed behavior, including an observed 100% / 2900 rpm condition.

@@ -5,6 +5,7 @@ Pool Manager can expose the optional virtual entity configured with `entity_chau
 The state gives the current high-level decision. Attributes expose the detailed plan. In the forecast rows:
 
 - `🏊` means the day selected as the next likely bathing opportunity;
+- forecast rows can now span up to 15 days and expose `strategic_score`, `horizon_weight`, `confidence` and `operational`;
 - `🔥` means a heating slot is planned that day;
 - `⏸` means no heating slot is planned that day.
 

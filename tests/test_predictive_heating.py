@@ -34,7 +34,7 @@ def _forecast(now, specs):
                 wind,
             )
         )
-    return module.normalize_daily_forecast(raw, horizon_days=10)
+    return module.normalize_daily_forecast(raw, horizon_days=15)
 
 
 def test_sunny_warm_day_scores_above_rainy_windy_day():
@@ -295,3 +295,37 @@ def test_large_plan_never_overlaps_weather_preload():
     ordered = sorted(slots, key=lambda item: item["start"])
     for previous, current in zip(ordered, ordered[1:]):
         assert previous["end"] <= current["start"]
+
+
+def test_fifteen_day_forecast_keeps_distant_outlook_with_lower_confidence():
+    now = datetime.datetime(2026, 9, 13, 10, 0)
+    specs = [(27, "sunny", 0, 5)] * 15
+    forecast = _forecast(now, specs)
+    assert len(forecast) == 15
+    assert forecast[2]["confidence"] == "strong"
+    assert forecast[6]["confidence"] == "medium"
+    assert forecast[9]["confidence"] == "trend"
+    assert forecast[12]["confidence"] == "indicative"
+    assert forecast[2]["strategic_score"] > forecast[12]["strategic_score"]
+
+
+def test_distant_indicative_swim_day_does_not_trigger_full_heating():
+    now = datetime.datetime(2026, 9, 13, 10, 0)
+    specs = [(16, "rainy", 90, 20)] * 15
+    specs[12] = (28, "sunny", 0, 5)
+    forecast = _forecast(now, specs)
+    plan = module.build_predictive_plan(
+        now=now,
+        water_c=29.0,
+        target_c=30.0,
+        forecast=forecast,
+        heating_rate_c_per_h=0.30,
+        floor_delta_c=2.0,
+        operational_horizon_days=3,
+    )
+    assert plan["candidate"] is not None
+    assert plan["candidate"]["index"] == 12
+    assert plan["candidate"]["confidence"] == "indicative"
+    assert plan["should_heat"] is False
+    assert plan["schedule"] == []
+    assert "observation 15 j" in plan["reason"]

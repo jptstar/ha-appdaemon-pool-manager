@@ -119,7 +119,8 @@ Since v0.6.0 the predictive planner is no longer limited to `Fin de saison • S
 chauffage_predictif: true
 entity_meteo_chauffage_predictif: weather.home
 entity_chauffage_predictif_status: sensor.pool_predictive_heating
-chauffage_predictif_horizon_jours: 10
+chauffage_predictif_horizon_jours: 15
+chauffage_predictif_horizon_operationnel_jours: 3
 chauffage_predictif_heure_baignade: "16:00:00"
 chauffage_predictif_heure_eau_prete: "11:00:00"
 chauffage_predictif_gain_chauffe_c_par_h: 0.30
@@ -127,9 +128,9 @@ chauffage_predictif_plancher_auto_delta_c: 2.0
 chauffage_predictif_plancher_fin_saison_delta_c: 4.0
 ```
 
-The engine asks Home Assistant for daily forecasts with `weather.get_forecasts`, scores each day from forecast high temperature, sun/cloud condition, rain probability/amount and wind, and marks the next credible bathing opportunity. A good day followed by several poor days is treated as a likely last opportunity and receives additional scheduling margin.
+The engine asks Home Assistant for daily forecasts with `weather.get_forecasts` and keeps up to 15 days when the provider supplies them. Forecast confidence is distance-weighted: J0-J3 is strong, J4-J7 medium, J8-J10 trend-level and J11-J15 indicative. It scores each day from forecast high temperature, sun/cloud condition, rain probability/amount and wind, and marks the next credible bathing opportunity. A good day followed by several poor days is treated as a likely last opportunity and receives additional scheduling margin.
 
-Heating is planned **before** the swimming day. By default the water is targeted to be ready at 11:00, while the main heating window is the previous day from 12:00 to 20:00. A small recovery therefore happens the previous afternoon/evening rather than waiting until the swimming morning. If more hours are needed, the target-day morning is used as a top-up; if even that is insufficient, the planner uses earlier windows and can enter immediate guarantee/catch-up mode.
+Heating is planned **before** the swimming day, but full comfort scheduling is intentionally limited to the operational horizon (`chauffage_predictif_horizon_operationnel_jours`, 3 days by default). More distant opportunities are strategic outlook only and cannot trigger a large immediate recovery. By default the water is targeted to be ready at 11:00, while the main heating window is the previous day from 12:00 to 20:00. A small recovery therefore happens the previous afternoon/evening rather than waiting until the swimming morning. If more hours are needed, the target-day morning is used as a top-up; if even that is insufficient, the planner uses earlier windows and can enter immediate guarantee/catch-up mode.
 
 The planner also computes a daytime heating-quality score from outdoor temperature and sun/cloud conditions. If the day before is substantially worse than a recent warmer/sunnier day and the recovery is large enough, a limited weather-aware preload may be shifted earlier while most heat remains scheduled for the day before. This preserves comfort while improving the chance of good PAC COP and available PV.
 
@@ -139,7 +140,7 @@ During a long bad-weather spell, **Automatique does not maintain the full setpoi
 
 The configured °C/h value is only the initial PAC model. While the PAC is really heating with confirmed circulation, Pool Manager learns observed water-heating speed in broad outdoor-temperature bins and progressively blends those measurements into future scheduling. Implausible samples are rejected. The learning is intentionally conservative and falls back to the configured rate after restart.
 
-If `entity_chauffage_predictif_status` is configured, AppDaemon publishes a virtual sensor intended for dashboards. Its attributes include the 7-10 day forecast rows, bathing score, `swim` marker, heating slots, next heating start/end, ready-by time, dynamic floor, estimated heating rate and learned rate buckets. This makes a Mushroom card able to show `🏊` for the selected bathing day and `🔥`/`⏸` for planned heating.
+If `entity_chauffage_predictif_status` is configured, AppDaemon publishes a virtual sensor intended for dashboards. Its attributes include up to 15 forecast rows, raw and distance-weighted bathing scores, confidence tier, `swim` marker, heating slots, next heating start/end, ready-by time, dynamic floor, estimated heating rate and learned rate buckets. This makes a Mushroom card able to show `🏊` for the selected bathing day and `🔥`/`⏸` for planned heating.
 
 The v0.5 `fin_saison_*` configuration names remain migration aliases. In particular, an existing `fin_saison_predictif: true` enables the common v0.6 predictive engine. AppDaemon 4.5+ is recommended because Home Assistant service response data is required for `weather.get_forecasts`.
 

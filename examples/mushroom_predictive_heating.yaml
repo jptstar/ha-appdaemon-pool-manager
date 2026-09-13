@@ -41,7 +41,7 @@ secondary: >-
     'lightning': '⛈️',
     'lightning-rainy': '⛈️'
   } %}
-  {% for d in (state_attr(e, 'forecast') or [])[:7] %}
+  {% for d in (state_attr(e, 'forecast') or [])[:15] %}
   {{ d.label }} {{ icons.get(d.condition, '🌤️') }}{% if d.temperature is not none %} {{ d.temperature | round(0) }}°{% endif %} · {{ d.score | round(0) }}{% if d.swim %} 🏊{% endif %}{% if d.heating %} 🔥{% if d.heating_slots %} {{ d.heating_slots[0].start }}–{{ d.heating_slots[0].end }}{% endif %}{% else %} ⏸{% endif %}
   {% endfor %}
 icon: mdi:pool-thermometer

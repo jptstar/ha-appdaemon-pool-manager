@@ -90,7 +90,8 @@ pool_manager:
   # No Home Assistant helper is required; choose a unique sensor entity id.
   entity_chauffage_predictif_status: sensor.pool_predictive_heating
 
-  chauffage_predictif_horizon_jours: 10
+  chauffage_predictif_horizon_jours: 15
+  chauffage_predictif_horizon_operationnel_jours: 3
   chauffage_predictif_prevision_refresh_s: 1800
   chauffage_predictif_prevision_max_age_s: 21600
 

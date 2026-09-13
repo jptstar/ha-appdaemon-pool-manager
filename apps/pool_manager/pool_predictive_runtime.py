@@ -53,13 +53,27 @@ class PredictiveHeatingSupport:
         self.chauffage_predictif_horizon_jours = max(
             3,
             min(
-                10,
+                15,
                 int(
                     float(
                         self._predictive_arg(
                             "chauffage_predictif_horizon_jours",
                             "fin_saison_horizon_jours",
-                            10,
+                            15,
+                        )
+                    )
+                ),
+            ),
+        )
+        self.chauffage_predictif_horizon_operationnel_jours = max(
+            1,
+            min(
+                7,
+                int(
+                    float(
+                        self.args.get(
+                            "chauffage_predictif_horizon_operationnel_jours",
+                            3,
                         )
                     )
                 ),
@@ -511,7 +525,11 @@ class PredictiveHeatingSupport:
                 else None
             ),
             "next_swim_score": candidate.get("score"),
+            "next_swim_strategic_score": candidate.get("strategic_score"),
+            "next_swim_confidence": candidate.get("confidence"),
             "next_swim_condition": candidate.get("condition"),
+            "forecast_horizon_days": self.chauffage_predictif_horizon_jours,
+            "operational_horizon_days": self.chauffage_predictif_horizon_operationnel_jours,
             "last_chance": bool(candidate.get("last_chance")),
             "swim_datetime": self._iso_datetime(candidate.get("swim_datetime")),
             "ready_by": self._iso_datetime((plan or {}).get("ready_datetime")),
@@ -607,6 +625,7 @@ class PredictiveHeatingSupport:
             previous_day_start=self.chauffage_predictif_veille_debut,
             previous_day_end=self.chauffage_predictif_veille_fin,
             morning_start=self.chauffage_predictif_matin_debut,
+            operational_horizon_days=self.chauffage_predictif_horizon_operationnel_jours,
         )
         return plan, rate
 

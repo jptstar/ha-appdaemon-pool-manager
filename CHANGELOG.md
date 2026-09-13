@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.1 - 15-day strategic weather outlook
+
+- Extend predictive weather ingestion from 10 to 15 days when the configured Home Assistant provider supplies that range.
+- Add distance-confidence weighting: J0-J3 strong, J4-J7 medium, J8-J10 trend, J11-J15 indicative.
+- Keep the raw bathing score while exposing a new `strategic_score`, `horizon_weight` and `confidence` tier in forecast diagnostics.
+- Add a 3-day operational planning horizon by default so distant forecasts can inform strategy without triggering large immediate heating expenditure.
+- Continue reserve-floor maintenance while a distant opportunity is only being observed; full comfort recovery is planned once it enters the operational horizon.
+- Expose forecast/operational horizon values and next-swim confidence in the predictive Home Assistant sensor.
+
 ## 0.6.0 - Season-wide predictive heating
 
 - Promote predictive heating from a Fin-de-saison-only feature to one common weather-aware engine used by `Automatique` and `Fin de saison`.

@@ -149,23 +149,47 @@ def heating_day_quality(entry):
     return round(_clamp(score, 0.0, 100.0), 1)
 
 
+def forecast_horizon_profile(index):
+    """Return confidence/weight for the 15-day strategic outlook."""
+    index = max(0, int(index))
+    if index <= 3:
+        return {"confidence": "strong", "weight": 1.00}
+    if index <= 7:
+        return {"confidence": "medium", "weight": 0.95}
+    if index <= 10:
+        return {"confidence": "trend", "weight": 0.85}
+    return {"confidence": "indicative", "weight": 0.70}
+
+
 def normalize_daily_forecast(
     raw_forecast,
-    horizon_days=10,
+    horizon_days=15,
     min_air_c=21.0,
     ideal_air_c=26.0,
 ):
-    """Normalize Home Assistant daily forecast entries."""
+    """Normalize Home Assistant daily forecast entries up to 15 days.
+
+    Raw weather quality remains visible as ``score``. ``strategic_score``
+    applies a distance-confidence weight so far forecasts can inform the
+    outlook without being treated as equally certain as J0-J3.
+    """
     result = []
-    for raw in list(raw_forecast or [])[: max(1, int(horizon_days))]:
+    limit = max(1, min(15, int(horizon_days)))
+    for index, raw in enumerate(list(raw_forecast or [])[:limit]):
         if not isinstance(raw, dict):
             continue
         item = dict(raw)
-        item["score"] = swim_day_score(
+        raw_score = swim_day_score(
             item,
             min_air_c=min_air_c,
             ideal_air_c=ideal_air_c,
         )
+        profile = forecast_horizon_profile(index)
+        item["score"] = raw_score
+        item["strategic_score"] = round(raw_score * profile["weight"], 1)
+        item["horizon_weight"] = profile["weight"]
+        item["confidence"] = profile["confidence"]
+        item["forecast_index"] = index
         item["heating_quality"] = heating_day_quality(item)
         parsed = _parse_datetime(item.get("datetime"))
         item["date"] = parsed.date() if parsed is not None else None
@@ -200,7 +224,7 @@ def find_swim_opportunities(
     min_air_c=21.0,
     swim_time="16:00:00",
 ):
-    """Return every credible bathing opportunity in chronological order."""
+    """Return credible bathing opportunities using distance weighting."""
     score_min = float(score_min)
     min_air_c = float(min_air_c)
     opportunities = []
@@ -216,17 +240,41 @@ def find_swim_opportunities(
             default="16:00:00",
         )
         temperature = _number(day.get("temperature"))
-        score = _number(day.get("score")) or 0.0
+        raw_score = _number(day.get("score")) or 0.0
+        profile = forecast_horizon_profile(index)
+        strategic_score = _number(day.get("strategic_score"))
+        if strategic_score is None:
+            strategic_score = raw_score * profile["weight"]
+        confidence = day.get("confidence") or profile["confidence"]
+        horizon_weight = _number(day.get("horizon_weight"))
+        if horizon_weight is None:
+            horizon_weight = profile["weight"]
+
         if swim_datetime <= now:
             continue
-        if temperature is None or temperature < min_air_c or score < score_min:
+        if (
+            temperature is None
+            or temperature < min_air_c
+            or strategic_score < score_min
+        ):
             continue
 
         bad_streak = 0
-        for following in (forecast or [])[index + 1 : index + 4]:
+        for relative, following in enumerate(
+            (forecast or [])[index + 1 : index + 4], start=1
+        ):
+            following_index = index + relative
             f_temp = _number(following.get("temperature"))
-            f_score = _number(following.get("score")) or 0.0
-            if f_temp is not None and f_temp >= min_air_c and f_score >= score_min:
+            f_raw_score = _number(following.get("score")) or 0.0
+            f_profile = forecast_horizon_profile(following_index)
+            f_strategic_score = _number(following.get("strategic_score"))
+            if f_strategic_score is None:
+                f_strategic_score = f_raw_score * f_profile["weight"]
+            if (
+                f_temp is not None
+                and f_temp >= min_air_c
+                and f_strategic_score >= score_min
+            ):
                 break
             bad_streak += 1
 
@@ -236,7 +284,10 @@ def find_swim_opportunities(
                 "date": date_value,
                 "swim_datetime": swim_datetime,
                 "temperature": temperature,
-                "score": score,
+                "score": raw_score,
+                "strategic_score": round(float(strategic_score), 1),
+                "horizon_weight": round(float(horizon_weight), 2),
+                "confidence": confidence,
                 "condition": day.get("condition"),
                 "bad_streak_after": bad_streak,
                 "last_chance": bad_streak >= 2,
@@ -534,6 +585,7 @@ def build_predictive_plan(
     previous_day_start="12:00:00",
     previous_day_end="20:00:00",
     morning_start="07:00:00",
+    operational_horizon_days=3,
 ):
     """Build one season-wide predictive heating decision."""
     water_c = float(water_c)
@@ -545,6 +597,7 @@ def build_predictive_plan(
         floor_c + max(0.1, float(maintenance_band_c)),
     )
     stop_margin_c = max(0.0, float(stop_margin_c))
+    operational_horizon_days = max(1, min(10, int(operational_horizon_days)))
 
     opportunities = find_swim_opportunities(
         forecast,
@@ -568,6 +621,7 @@ def build_predictive_plan(
         "active_segment": None,
         "next_segment": None,
         "ready_datetime": None,
+        "operational_horizon_days": operational_horizon_days,
         "reason": "",
     }
 
@@ -606,6 +660,32 @@ def build_predictive_plan(
     )
     candidate["ready_datetime"] = ready_datetime
     base["ready_datetime"] = ready_datetime
+
+    candidate_index = int(candidate.get("index") or 0)
+    if candidate_index > operational_horizon_days:
+        confidence = (
+            candidate.get("confidence")
+            or forecast_horizon_profile(candidate_index)["confidence"]
+        )
+        if water_c < floor_c and _inside_window(
+            now,
+            previous_day_start,
+            previous_day_end,
+        ):
+            base.update(
+                should_heat=True,
+                heat_target_c=round(maintenance_target, 2),
+                reason=(
+                    f"tendance {confidence} J+{candidate_index}; "
+                    f"recharge réserve vers {maintenance_target:.1f} °C"
+                ),
+            )
+        else:
+            base["reason"] = (
+                f"tendance {confidence} J+{candidate_index}; observation 15 j, "
+                f"planification opérationnelle à J+{operational_horizon_days}"
+            )
+        return base
 
     deficit = max(0.0, target_c - water_c)
     required_hours = deficit / heating_rate
@@ -735,6 +815,10 @@ def dashboard_forecast(forecast, plan, now):
                 ),
                 "wind_speed": _number(day.get("wind_speed")),
                 "score": _number(day.get("score")) or 0.0,
+                "strategic_score": _number(day.get("strategic_score")) or 0.0,
+                "horizon_weight": _number(day.get("horizon_weight")) or 1.0,
+                "confidence": day.get("confidence") or forecast_horizon_profile(index)["confidence"],
+                "operational": index <= int((plan or {}).get("operational_horizon_days") or 3),
                 "heating_quality": _number(day.get("heating_quality")) or 0.0,
                 "swim": day_date == selected_date,
                 "heating": bool(slots),

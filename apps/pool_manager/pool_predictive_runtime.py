@@ -222,6 +222,7 @@ class PredictiveHeatingSupport:
         self.chauffage_predictif_heat_target_c = None
         self.chauffage_predictif_last_plan = None
         self.chauffage_predictif_last_log_signature = None
+        self.chauffage_predictif_last_status_signature = None
         self.chauffage_predictif_last_rate = self.chauffage_predictif_gain_chauffe_c_par_h
 
         self.chauffage_predictif_rate_model = {}
@@ -493,8 +494,12 @@ class PredictiveHeatingSupport:
             "icon": "mdi:pool-thermometer",
             "mode": kind,
             "enabled": bool(self.chauffage_predictif),
-            "water_temperature": water,
-            "target_temperature": target,
+            "water_temperature": (
+                round(float(water), 1) if water is not None else None
+            ),
+            "target_temperature": (
+                round(float(target), 1) if target is not None else None
+            ),
             "floor_temperature": (plan or {}).get("floor_c"),
             "heating_rate_c_per_h": round(float(rate), 3) if rate else None,
             "heating_now": bool((plan or {}).get("should_heat")),
@@ -524,12 +529,33 @@ class PredictiveHeatingSupport:
             ),
         }
 
+        state = self._predictive_status_state(plan, kind, override=override)
+        signature = (
+            state,
+            attributes.get("water_temperature"),
+            attributes.get("target_temperature"),
+            attributes.get("heating_now"),
+            attributes.get("next_swim_date"),
+            attributes.get("next_swim_score"),
+            attributes.get("next_heating_start"),
+            attributes.get("next_heating_end"),
+            attributes.get("reason"),
+            tuple(
+                (slot.get("start"), slot.get("end"), slot.get("kind"))
+                for slot in schedule
+            ),
+            attributes.get("forecast_updated_at"),
+        )
+        if signature == self.chauffage_predictif_last_status_signature:
+            return
+
         try:
             self.set_state(
                 self.entity_chauffage_predictif_status,
-                state=self._predictive_status_state(plan, kind, override=override),
+                state=state,
                 attributes=attributes,
             )
+            self.chauffage_predictif_last_status_signature = signature
             self._recover("chauffage_predictif_status")
         except Exception as exc:
             self._fault(

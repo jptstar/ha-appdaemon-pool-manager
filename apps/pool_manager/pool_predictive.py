@@ -371,6 +371,61 @@ def build_heating_schedule(
     segments = []
     remaining = required
 
+    # Weather-aware preload: the day before remains the primary preparation day,
+    # but if it is markedly cold/cloudy/rainy and a recent earlier day is much
+    # warmer/sunnier, shift at most 25% (max 2 h) to that better window. The
+    # majority still runs the day before, preserving comfort and limiting losses.
+    forecast_by_date = {
+        item.get("date"): item
+        for item in (forecast or [])
+        if isinstance(item, dict) and item.get("date") is not None
+    }
+    previous_quality = float(
+        (forecast_by_date.get(previous_day) or {}).get("heating_quality") or 50.0
+    )
+    if required >= 4.0 and previous_day > now.date():
+        candidates = []
+        day_cursor = previous_day - datetime.timedelta(days=1)
+        for age in range(1, 4):
+            if day_cursor < now.date():
+                break
+            quality = float(
+                (forecast_by_date.get(day_cursor) or {}).get("heating_quality") or 0.0
+            )
+            # Penalize older heat storage so weather must be clearly better.
+            effective_quality = quality - (age - 1) * 8.0
+            candidates.append((effective_quality, quality, day_cursor))
+            day_cursor -= datetime.timedelta(days=1)
+        if candidates:
+            _, best_quality, best_day = max(candidates, key=lambda item: item[0])
+            if best_quality >= previous_quality + 25.0:
+                smart_hours = min(2.0, required * 0.25)
+                smart_start, smart_end = _window(
+                    best_day,
+                    previous_day_start,
+                    previous_day_end,
+                    tzinfo,
+                )
+                clipped_smart = _clip_window(
+                    smart_start,
+                    smart_end,
+                    now,
+                    deadline,
+                )
+                if clipped_smart is not None:
+                    segment, remaining = _allocate_latest(
+                        smart_hours,
+                        clipped_smart[0],
+                        clipped_smart[1],
+                        "weather_preheat",
+                    )
+                    if segment:
+                        segments.append(segment)
+                        # _allocate_latest only returns the unallocated fraction
+                        # of smart_hours, so deduct the amount actually used from
+                        # the global remaining heat requirement.
+                        remaining = required - float(segment["hours"])
+
     prev_start, prev_end = _window(
         previous_day,
         previous_day_start,

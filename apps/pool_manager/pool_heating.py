@@ -81,7 +81,10 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         self.chauffage_preset_smart = self.args.get("chauffage_preset_smart", "Smart")
         self.chauffage_preset_turbo = self.args.get("chauffage_preset_turbo", "Turbo")
         self.chauffage_premiere_chauffe_marge_c = float(
-            self.args.get("chauffage_premiere_chauffe_marge_c", 0.3)
+            self.args.get(
+                "chauffage_debut_saison_marge_c",
+                self.args.get("chauffage_premiere_chauffe_marge_c", 0.3),
+            )
         )
 
         # v0.6 common predictive engine; v0.5 fin_saison_* keys remain aliases.
@@ -429,6 +432,8 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         if self.chauffage_predictif and kind in {"auto", "end_season"}:
             if kind == "auto":
                 if not self.gestion_pac_auto:
+                    self.chauffage_predictif_heat_requested = False
+                    self._cancel_chauffage_start()
                     self._update_predictive_diagnostics(
                         kind, override="⏸ Auto PAC non piloté"
                     )

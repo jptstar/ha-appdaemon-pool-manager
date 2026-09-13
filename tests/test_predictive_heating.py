@@ -244,3 +244,29 @@ def test_dashboard_rows_mark_swim_day_and_heating_day():
     rows = module.dashboard_forecast(forecast, plan, now)
     assert any(row["swim"] for row in rows)
     assert any(row["heating"] for row in rows)
+
+
+def test_weather_quality_can_shift_limited_preheat_earlier():
+    now = datetime.datetime(2026, 9, 13, 10, 0)
+    forecast = _forecast(
+        now,
+        [
+            (20, "cloudy", 40, 8),
+            (27, "sunny", 0, 5),
+            (15, "rainy", 90, 20),
+            (27, "sunny", 0, 5),
+        ],
+    )
+    ready = datetime.datetime(2026, 9, 16, 11, 0)
+    swim = datetime.datetime(2026, 9, 16, 16, 0)
+    slots = module.build_heating_schedule(
+        now=now,
+        ready_datetime=ready,
+        swim_datetime=swim,
+        required_hours=8.0,
+        forecast=forecast,
+    )
+    assert any(slot["kind"] == "weather_preheat" for slot in slots)
+    assert any(slot["kind"] == "previous_day" for slot in slots)
+    smart = next(slot for slot in slots if slot["kind"] == "weather_preheat")
+    assert smart["hours"] <= 2.0

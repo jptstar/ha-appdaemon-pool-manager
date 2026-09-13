@@ -33,7 +33,8 @@ apps/
     pool_common.py          # shared helpers and filtration math
     pool_status.py          # status / quota presentation
     pool_safety.py          # PAC sequencing, freeze and fail-safe layer
-    pool_end_season.py      # predictive 7-10 day end-of-season planner
+    pool_predictive.py      # pure 7-10 day predictive planner
+    pool_predictive_runtime.py # weather cache, PAC learning + HA diagnostics
     pool_daylight.py        # daylight window + thermal-reference memory
     pool_lifecycle.py       # startup, listeners and scheduling
     pool_devices.py         # pump, PAC and chlorinator entity handling
@@ -110,26 +111,37 @@ climate -> Off
 
 The PAC remains off outside the configured automatic window unless a temporary Home Assistant heating override is active.
 
-## Predictive end-of-season heating
+## Season-wide predictive heating
 
-Since v0.5.0, `Fin de saison • Smart` can optionally become a predictive strategy instead of keeping PAC circulation available 24/7:
+Since v0.6.0 the predictive planner is no longer limited to `Fin de saison • Smart`. With `chauffage_predictif: true`, the same weather-aware engine runs in **Automatique** and **Fin de saison**, while the modes only change the thermal-reserve profile.
 
 ```yaml
-fin_saison_predictif: true
-entity_meteo_fin_saison: weather.home
-fin_saison_horizon_jours: 10
-fin_saison_heure_baignade_cible: "16:00:00"
-fin_saison_gain_chauffe_c_par_h: 0.30
-fin_saison_temperature_plancher_delta_c: 3.0
+chauffage_predictif: true
+entity_meteo_chauffage_predictif: weather.home
+entity_chauffage_predictif_status: sensor.pool_predictive_heating
+chauffage_predictif_horizon_jours: 10
+chauffage_predictif_heure_baignade: "16:00:00"
+chauffage_predictif_heure_eau_prete: "11:00:00"
+chauffage_predictif_gain_chauffe_c_par_h: 0.30
+chauffage_predictif_plancher_auto_delta_c: 2.0
+chauffage_predictif_plancher_fin_saison_delta_c: 4.0
 ```
 
-The planner asks Home Assistant for the weather entity's **daily** forecast using `weather.get_forecasts`. It uses as many days as the provider actually returns, up to the configured 10-day horizon. The strategic horizon identifies the next credible bathing opportunity from forecast maximum temperature, condition/cloudiness, rain and wind. A good day followed by several bad days is marked as a likely **last chance** and receives extra scheduling margin.
+The engine asks Home Assistant for daily forecasts with `weather.get_forecasts`, scores each day from forecast high temperature, sun/cloud condition, rain probability/amount and wind, and marks the next credible bathing opportunity. A good day followed by several poor days is treated as a likely last opportunity and receives additional scheduling margin.
 
-The operational decision works backwards from the configured bathing time. Pool Manager estimates the heating hours needed from the current water temperature and `fin_saison_gain_chauffe_c_par_h`, then places those hours as late as possible inside the preferred daytime heating window. This means a warm/sunny tomorrow normally does **not** cause needless heating through the preceding night. If the pool is too cold to recover before the opportunity using daytime hours alone, the calculated start can move earlier, including overnight when that is genuinely required to meet the deadline.
+Heating is planned **before** the swimming day. By default the water is targeted to be ready at 11:00, while the main heating window is the previous day from 12:00 to 20:00. A small recovery therefore happens the previous afternoon/evening rather than waiting until the swimming morning. If more hours are needed, the target-day morning is used as a top-up; if even that is insufficient, the planner uses earlier windows and can enter immediate guarantee/catch-up mode.
 
-When no credible bathing day is visible, the planner does not maintain the full setpoint. It only protects a configurable recovery floor (`setpoint - fin_saison_temperature_plancher_delta_c`) and recharges that floor during preferred daytime hours. The normal filtration strategy therefore regains control whenever predictive heating is waiting. PAC startup, minimum-flow protection, forced stop and freeze protection remain higher priority.
+The planner also computes a daytime heating-quality score from outdoor temperature and sun/cloud conditions. If the day before is substantially worse than a recent warmer/sunnier day and the recovery is large enough, a limited weather-aware preload may be shifted earlier while most heat remains scheduled for the day before. This preserves comfort while improving the chance of good PAC COP and available PV.
 
-Forecasts are cached and refreshed every 30 minutes by default. If refresh temporarily fails, a recent cache can be reused for up to six hours. Without a usable forecast, the planner falls back to recovery-floor maintenance instead of inventing weather. The feature is **opt-in** so upgrading from v0.4.x does not silently change existing end-of-season behavior. AppDaemon 4.5+ is recommended because Home Assistant service response data is required for `weather.get_forecasts`.
+During a long bad-weather spell, **Automatique does not maintain the full setpoint continuously**. It allows the pool to drift to a recovery reserve (2 °C below setpoint by default), while `Fin de saison` allows a larger drift (4 °C by default). When a credible bathing day appears, the planner recalculates the required recovery and builds a new schedule automatically.
+
+`Début de saison • Smart` replaces the old user-facing `Première chauffe • Smart` wording. It deliberately heats to the PAC setpoint, then automatically switches the selector to `Automatique`. The old selector wording is still recognized so existing Home Assistant configurations do not fail during migration. Turbo remains an explicit immediate override; `Désactivé`, `Hors Gel` and forced stop stay above the predictive planner.
+
+The configured °C/h value is only the initial PAC model. While the PAC is really heating with confirmed circulation, Pool Manager learns observed water-heating speed in broad outdoor-temperature bins and progressively blends those measurements into future scheduling. Implausible samples are rejected. The learning is intentionally conservative and falls back to the configured rate after restart.
+
+If `entity_chauffage_predictif_status` is configured, AppDaemon publishes a virtual sensor intended for dashboards. Its attributes include the 7-10 day forecast rows, bathing score, `swim` marker, heating slots, next heating start/end, ready-by time, dynamic floor, estimated heating rate and learned rate buckets. This makes a Mushroom card able to show `🏊` for the selected bathing day and `🔥`/`⏸` for planned heating.
+
+The v0.5 `fin_saison_*` configuration names remain migration aliases. In particular, an existing `fin_saison_predictif: true` enables the common v0.6 predictive engine. AppDaemon 4.5+ is recommended because Home Assistant service response data is required for `weather.get_forecasts`.
 
 ## Heating override boundary
 

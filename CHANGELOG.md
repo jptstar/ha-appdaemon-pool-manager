@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.0 - Season-wide predictive heating
+
+- Promote predictive heating from a Fin-de-saison-only feature to one common weather-aware engine used by `Automatique` and `Fin de saison`.
+- Rename the recommended `Première chauffe • Smart` selector option to `Début de saison • Smart`; keep the old wording accepted as a migration alias and automatically switch to `Automatique` after the setpoint is reached.
+- Score bathing opportunities across up to 10 forecast days from temperature, sun/cloud conditions, precipitation and wind, with last-opportunity detection after a good day followed by a poor spell.
+- Plan heating primarily on the **previous day** and target water ready by 11:00 by default; use the swimming-day morning only as a top-up and enter immediate guarantee mode if preferred windows become insufficient.
+- Add weather-aware limited preload when an earlier day is substantially warmer/sunnier than a poor day-before window, while keeping most preparation close to the bathing day.
+- Let `Automatique` drift to a configurable recovery reserve during long bad-weather periods instead of maintaining full setpoint; allow a larger reserve delta in `Fin de saison`.
+- Learn actual PAC heating speed from real heating cycles in broad outdoor-temperature bins and blend learned performance into future scheduling.
+- Prefer the persisted thermal-reference temperature while the pump is stopped instead of blindly trusting an available but potentially stale pipe sensor.
+- Publish an optional virtual predictive-heating sensor with forecast rows, `🏊` bathing marker, `🔥` heating slots, ready-by time, next start/end, dynamic floor and learned PAC-rate diagnostics for Mushroom dashboards.
+- Deduplicate diagnostic sensor updates to avoid second-by-second recorder churn.
+- Keep pump-first PAC sequencing, post-circulation, forced stop, Hors Gel and PAC-flow fail-safe safety above every predictive decision.
+- Accept v0.5 `fin_saison_*` keys as migration aliases; an existing `fin_saison_predictif: true` upgrades to the common v0.6 engine.
+
 ## 0.5.0 - Predictive end-of-season heating
 
 - Add an opt-in predictive strategy for `Fin de saison • Smart` so the pump/PAC no longer need to remain available 24/7 merely to preserve the setpoint.

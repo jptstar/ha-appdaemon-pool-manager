@@ -13,7 +13,9 @@ spec.loader.exec_module(module)
 def test_selector_modes_are_classified():
     assert module.chauffage_mode_kind("Désactivé") == "disabled"
     assert module.chauffage_mode_kind("Automatique") == "auto"
-    assert module.chauffage_mode_kind("Première chauffe • Smart") == "first_heat"
+    assert module.chauffage_mode_kind("Début de saison • Smart") == "season_start"
+    # v0.5 wording remains accepted for existing Home Assistant selectors.
+    assert module.chauffage_mode_kind("Première chauffe • Smart") == "season_start"
     assert module.chauffage_mode_kind("Fin de saison • Smart") == "end_season"
     assert module.chauffage_mode_kind("Turbo • 6 h") == "turbo"
     assert module.chauffage_mode_kind("unexpected") == "unknown"
@@ -34,7 +36,7 @@ def test_all_turbo_durations_are_mapped_to_seconds():
         assert module.turbo_duration_seconds(option) == seconds
 
 
-def test_first_heat_completion_uses_margin_below_setpoint():
+def test_season_start_completion_uses_margin_below_setpoint():
     assert module.premiere_chauffe_terminee(27.7, 28.0, 0.3) is True
     assert module.premiere_chauffe_terminee(27.69, 28.0, 0.3) is False
     assert module.premiere_chauffe_terminee(None, 28.0, 0.3) is False
@@ -44,6 +46,7 @@ def test_first_heat_completion_uses_margin_below_setpoint():
 def test_heating_mode_set_contains_every_supported_option():
     assert module.CHAUFFAGE_DESACTIVE in module.CHAUFFAGE_MODES
     assert module.CHAUFFAGE_AUTO in module.CHAUFFAGE_MODES
+    assert module.CHAUFFAGE_DEBUT_SAISON in module.CHAUFFAGE_MODES
     assert module.CHAUFFAGE_PREMIERE_CHAUFFE in module.CHAUFFAGE_MODES
     assert module.CHAUFFAGE_FIN_SAISON in module.CHAUFFAGE_MODES
     assert set(module.TURBO_DURATIONS_H).issubset(module.CHAUFFAGE_MODES)

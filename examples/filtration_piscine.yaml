@@ -66,43 +66,66 @@ pool_manager:
   entity_pac_conso: sensor.pool_heat_pump_power
   entity_pompe_conso: sensor.pool_pump_power
 
-  # v0.4.4: one Home Assistant selector owns all user-facing heating policy.
-  # Supported options must match exactly:
-  # Désactivé / Automatique / Première chauffe • Smart / Fin de saison • Smart /
+  # v0.6.0: one selector controls the heating profile. Recommended options:
+  # Désactivé / Automatique / Début de saison • Smart / Fin de saison • Smart /
   # Turbo • 1 h / 2 h / 3 h / 6 h / 12 h / 1 jour / 2 jours / 3 jours.
+  # The old `Première chauffe • Smart` wording is still accepted for migration.
   entity_chauffage: input_select.pool_heating
 
-  # Optional helpers make Turbo duration and the previous heating mode persistent.
-  # If the timer is omitted, AppDaemon uses an in-memory fallback timer.
   entity_chauffage_timer: timer.pool_heating
   entity_chauffage_precedent: input_text.pool_heating_previous
 
   chauffage_preset_auto: Smart
   chauffage_preset_smart: Smart
   chauffage_preset_turbo: Turbo
-  chauffage_premiere_chauffe_marge_c: 0.3
+  chauffage_debut_saison_marge_c: 0.3
 
-  # v0.5.0: optional predictive end-of-season heating. With this enabled,
-  # Fin de saison no longer keeps pump/PAC availability 24/7. It looks across
-  # the available daily weather forecast (up to 10 days), identifies likely
-  # bathing windows and schedules only the heat needed before the next one.
-  fin_saison_predictif: false
-  entity_meteo_fin_saison: weather.home
-  fin_saison_horizon_jours: 10
-  fin_saison_prevision_refresh_s: 1800
-  fin_saison_prevision_max_age_s: 21600
-  fin_saison_temperature_baignade_min_c: 21
-  fin_saison_temperature_baignade_ideale_c: 26
-  fin_saison_score_baignade_min: 55
-  fin_saison_heure_baignade_cible: "16:00:00"
-  fin_saison_gain_chauffe_c_par_h: 0.30
-  fin_saison_temperature_plancher_delta_c: 3.0
-  fin_saison_recharge_plancher_c: 0.5
-  fin_saison_marge_arret_c: 0.2
-  fin_saison_marge_planification_h: 0.5
-  fin_saison_marge_derniere_occasion_h: 1.0
-  fin_saison_heure_debut_chauffe: "08:00:00"
-  fin_saison_heure_fin_chauffe: "20:00:00"
+  # v0.6.0 season-wide predictive heating. When enabled it is used in both
+  # Automatique and Fin de saison. Début de saison heats to setpoint and then
+  # automatically switches the selector to Automatique.
+  chauffage_predictif: false
+  entity_meteo_chauffage_predictif: weather.home
+
+  # Optional virtual sensor published by AppDaemon for Mushroom/dashboard use.
+  # No Home Assistant helper is required; choose a unique sensor entity id.
+  entity_chauffage_predictif_status: sensor.pool_predictive_heating
+
+  chauffage_predictif_horizon_jours: 10
+  chauffage_predictif_prevision_refresh_s: 1800
+  chauffage_predictif_prevision_max_age_s: 21600
+
+  # Bathing opportunity score: temperature + sun/clouds - rain - wind.
+  chauffage_predictif_temperature_baignade_min_c: 21
+  chauffage_predictif_temperature_baignade_ideale_c: 26
+  chauffage_predictif_score_baignade_min: 55
+  chauffage_predictif_heure_baignade: "16:00:00"
+
+  # The water should normally be ready before late morning. Heating is planned
+  # first on the previous day; target-day morning is only a top-up window.
+  chauffage_predictif_heure_eau_prete: "11:00:00"
+  chauffage_predictif_veille_debut: "12:00:00"
+  chauffage_predictif_veille_fin: "20:00:00"
+  chauffage_predictif_matin_debut: "07:00:00"
+
+  # Initial PAC model. Runtime learning refines °C/h in outdoor-temperature bins.
+  chauffage_predictif_gain_chauffe_c_par_h: 0.30
+  chauffage_predictif_apprentissage: true
+  chauffage_predictif_apprentissage_min_s: 1800
+  chauffage_predictif_apprentissage_alpha: 0.25
+
+  # Automatic keeps more thermal reserve during a long bad-weather spell;
+  # End of season allows a larger drift before preserving recoverability.
+  chauffage_predictif_plancher_auto_delta_c: 2.0
+  chauffage_predictif_plancher_fin_saison_delta_c: 4.0
+  chauffage_predictif_recharge_plancher_c: 0.5
+
+  chauffage_predictif_marge_arret_c: 0.2
+  chauffage_predictif_marge_planification_h: 0.5
+  chauffage_predictif_marge_derniere_occasion_h: 1.0
+
+  # v0.5 fin_saison_* keys are accepted as migration aliases. If an existing
+  # configuration has `fin_saison_predictif: true`, v0.6 upgrades it to the
+  # common season-wide engine.
 
   # Legacy v0.2.x-v0.4.3 compatibility only. Do not configure this together with
   # a new HA automation that also controls the v0.4.4 selector.

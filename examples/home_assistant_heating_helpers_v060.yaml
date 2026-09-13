@@ -1,0 +1,32 @@
+# Home Assistant helper example for Pool Manager v0.6.0.
+# Merge the relevant blocks into your existing package; do not load duplicate helpers.
+
+input_select:
+  piscine_chauffage:
+    name: Chauffage piscine
+    options:
+      - "Désactivé"
+      - "Automatique"
+      - "Début de saison • Smart"
+      - "Fin de saison • Smart"
+      - "Turbo • 1 h"
+      - "Turbo • 2 h"
+      - "Turbo • 3 h"
+      - "Turbo • 6 h"
+      - "Turbo • 12 h"
+      - "Turbo • 1 jour"
+      - "Turbo • 2 jours"
+      - "Turbo • 3 jours"
+    icon: mdi:heat-pump
+
+input_text:
+  piscine_chauffage_precedent:
+    name: Chauffage piscine précédent
+    max: 50
+    icon: mdi:backup-restore
+
+timer:
+  piscine_chauffage:
+    name: Chauffage piscine
+    restore: true
+    icon: mdi:timer

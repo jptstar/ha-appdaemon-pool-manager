@@ -25,7 +25,7 @@ jobs:
           python -m py_compile apps/pool_manager/*.py
           pytest -q
 
-      - name: Publish GitHub release
+      - name: Publish or update GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
@@ -37,12 +37,18 @@ jobs:
             exit 1
           fi
 
+          notes_file="docs/${version}-RELEASE.md"
+
           if gh release view "$version" >/dev/null 2>&1; then
-            echo "Release $version already exists"
+            echo "Release $version already exists; updating it"
+            if [ -f "$notes_file" ]; then
+              gh release edit "$version" --title "$version" --notes-file "$notes_file"
+            else
+              gh release edit "$version" --title "$version"
+            fi
             exit 0
           fi
 
-          notes_file="docs/${version}-RELEASE.md"
           if [ -f "$notes_file" ]; then
             gh release create "$version" --target "$GITHUB_SHA" --title "$version" --notes-file "$notes_file"
           else

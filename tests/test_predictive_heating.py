@@ -270,3 +270,28 @@ def test_weather_quality_can_shift_limited_preheat_earlier():
     assert any(slot["kind"] == "previous_day" for slot in slots)
     smart = next(slot for slot in slots if slot["kind"] == "weather_preheat")
     assert smart["hours"] <= 2.0
+
+
+def test_large_plan_never_overlaps_weather_preload():
+    now = datetime.datetime(2026, 9, 13, 10, 0)
+    forecast = _forecast(
+        now,
+        [
+            (20, "cloudy", 40, 8),
+            (28, "sunny", 0, 5),
+            (14, "rainy", 95, 20),
+            (27, "sunny", 0, 5),
+        ],
+    )
+    ready = datetime.datetime(2026, 9, 16, 11, 0)
+    swim = datetime.datetime(2026, 9, 16, 16, 0)
+    slots = module.build_heating_schedule(
+        now=now,
+        ready_datetime=ready,
+        swim_datetime=swim,
+        required_hours=15.0,
+        forecast=forecast,
+    )
+    ordered = sorted(slots, key=lambda item: item["start"])
+    for previous, current in zip(ordered, ordered[1:]):
+        assert previous["end"] <= current["start"]

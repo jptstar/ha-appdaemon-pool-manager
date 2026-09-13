@@ -465,6 +465,16 @@ def build_heating_schedule(
             previous_day_end,
             tzinfo,
         )
+        # Do not overlap a weather-aware preload already reserved on the
+        # same earlier day. Fill the free part immediately before that preload.
+        same_day_starts = [
+            item["start"]
+            for item in segments
+            if item["start"].date() == day
+        ]
+        if same_day_starts:
+            early_end = min(early_end, min(same_day_starts))
+
         clipped = _clip_window(early_start, early_end, now, deadline)
         if clipped is not None:
             segment, remaining = _allocate_latest(

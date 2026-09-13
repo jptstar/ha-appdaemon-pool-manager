@@ -27,6 +27,19 @@ class FiltrationPiscine(
     ControlMixin,
     hass.Hass,
 ):
+    def call_service(self, service, **kwargs):
+        """Keep legacy response calls compatible with AppDaemon 4.5+.
+
+        Pool Manager v0.5/v0.6 used ``return_result=True`` while AppDaemon 4.5
+        exposes Home Assistant service responses through ``return_response``.
+        Translate the old internal flag here so response-returning services such
+        as ``weather/get_forecasts`` are requested correctly without leaking an
+        unsupported ``return_result`` field into Home Assistant service data.
+        """
+        if kwargs.pop("return_result", False):
+            kwargs["return_response"] = True
+        return super().call_service(service, **kwargs)
+
     def initialize(self):
         """Initialize the production controller and optional HA policy inputs."""
         self.entity_derogation_chauffage = self.args.get("entity_derogation_chauffage")

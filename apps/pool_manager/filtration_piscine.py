@@ -4,6 +4,7 @@
 import hassapi as hass
 
 from pool_common import *
+from pool_runtime_stability import RuntimeStabilityMixin
 from pool_status import StatusMixin
 from pool_heating import HeatingModeMixin
 from pool_auto_gate import AutoModeGateMixin
@@ -16,6 +17,7 @@ from pool_control import ControlMixin
 
 
 class FiltrationPiscine(
+    RuntimeStabilityMixin,
     StatusMixin,
     HeatingModeMixin,
     AutoModeGateMixin,

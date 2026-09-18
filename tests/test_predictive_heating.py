@@ -292,7 +292,7 @@ def test_night_heat_is_only_requested_when_day_cannot_hold_trajectory():
     plan = _plan(
         now,
         forecast,
-        water=22.5,
+        water=26.0,
         target=30,
         heating_rate_model=learned,
         today_day_hours_remaining=0,

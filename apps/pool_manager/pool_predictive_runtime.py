@@ -1,29 +1,40 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Copyright (C) 2026 jptstar
 
-"""Runtime support for the season-wide predictive heating engine."""
+"""Runtime integration for weather-aware, self-learning pool heating."""
 
 import datetime
+import json
+import os
 
 from pool_predictive import (
     build_predictive_plan,
     dashboard_forecast,
-    estimate_heating_rate,
     extract_weather_forecast,
-    find_swim_opportunities,
+    normalize_cover_state,
     normalize_daily_forecast,
     update_heating_rate_model,
+    update_loss_model,
 )
 
 
 class PredictiveHeatingSupport:
-    """Shared weather-aware heating support used by HeatingModeMixin."""
+    """Weather forecast + persistent thermal learning shared by heating modes."""
 
     @staticmethod
     def _bool_value(value, default=False):
         if value is None:
             return bool(default)
         return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _optional_float(value):
+        if value is None or str(value).strip() == "":
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
     def _predictive_arg(self, new_key, legacy_key=None, default=None):
         if new_key in self.args:
@@ -33,8 +44,6 @@ class PredictiveHeatingSupport:
         return default
 
     def _initialize_predictive_heating(self):
-        # v0.5 fin_saison_predictif remains a migration alias. If it was already
-        # enabled, v0.6 upgrades it to the common season-wide predictive engine.
         enabled_value = self._predictive_arg(
             "chauffage_predictif",
             "fin_saison_predictif",
@@ -65,20 +74,6 @@ class PredictiveHeatingSupport:
                 ),
             ),
         )
-        self.chauffage_predictif_horizon_operationnel_jours = max(
-            1,
-            min(
-                7,
-                int(
-                    float(
-                        self.args.get(
-                            "chauffage_predictif_horizon_operationnel_jours",
-                            3,
-                        )
-                    )
-                ),
-            ),
-        )
         self.chauffage_predictif_prevision_refresh_s = max(
             300,
             int(
@@ -103,6 +98,7 @@ class PredictiveHeatingSupport:
                 )
             ),
         )
+
         self.chauffage_predictif_temperature_baignade_min_c = float(
             self._predictive_arg(
                 "chauffage_predictif_temperature_baignade_min_c",
@@ -124,16 +120,8 @@ class PredictiveHeatingSupport:
                 55.0,
             )
         )
-        self.chauffage_predictif_heure_baignade = self._predictive_arg(
-            "chauffage_predictif_heure_baignade",
-            "fin_saison_heure_baignade_cible",
-            "16:00:00",
-        )
-        self.chauffage_predictif_heure_eau_prete = self.args.get(
-            "chauffage_predictif_heure_eau_prete",
-            "11:00:00",
-        )
 
+        # Fallback only until the installation has learned enough real samples.
         self.chauffage_predictif_gain_chauffe_c_par_h = max(
             0.05,
             float(
@@ -143,6 +131,21 @@ class PredictiveHeatingSupport:
                     0.30,
                 )
             ),
+        )
+        self.chauffage_predictif_perte_nuit_delta10_c_par_h = max(
+            0.0,
+            float(
+                self.args.get(
+                    "chauffage_predictif_perte_nuit_delta10_c_par_h",
+                    0.05,
+                )
+            ),
+        )
+
+        # Optional absolute minimum water temperature. When absent, the existing
+        # Auto / End-of-season deltas remain the compatibility fallback.
+        self.chauffage_predictif_temperature_min_eau_c = self._optional_float(
+            self.args.get("chauffage_predictif_temperature_min_eau_c")
         )
         self.chauffage_predictif_plancher_auto_delta_c = max(
             0.0,
@@ -178,41 +181,6 @@ class PredictiveHeatingSupport:
                 )
             ),
         )
-        self.chauffage_predictif_marge_planification_h = max(
-            0.0,
-            float(
-                self._predictive_arg(
-                    "chauffage_predictif_marge_planification_h",
-                    "fin_saison_marge_planification_h",
-                    0.5,
-                )
-            ),
-        )
-        self.chauffage_predictif_marge_derniere_occasion_h = max(
-            self.chauffage_predictif_marge_planification_h,
-            float(
-                self._predictive_arg(
-                    "chauffage_predictif_marge_derniere_occasion_h",
-                    "fin_saison_marge_derniere_occasion_h",
-                    1.0,
-                )
-            ),
-        )
-
-        self.chauffage_predictif_veille_debut = self._predictive_arg(
-            "chauffage_predictif_veille_debut",
-            "fin_saison_heure_debut_chauffe",
-            "12:00:00",
-        )
-        self.chauffage_predictif_veille_fin = self._predictive_arg(
-            "chauffage_predictif_veille_fin",
-            "fin_saison_heure_fin_chauffe",
-            "20:00:00",
-        )
-        self.chauffage_predictif_matin_debut = self.args.get(
-            "chauffage_predictif_matin_debut",
-            "07:00:00",
-        )
 
         self.chauffage_predictif_apprentissage = self._bool_value(
             self.args.get("chauffage_predictif_apprentissage", "true"),
@@ -220,14 +188,39 @@ class PredictiveHeatingSupport:
         )
         self.chauffage_predictif_apprentissage_min_s = max(
             900,
-            int(float(self.args.get("chauffage_predictif_apprentissage_min_s", 1800))),
+            int(
+                float(
+                    self.args.get(
+                        "chauffage_predictif_apprentissage_min_s",
+                        1800,
+                    )
+                )
+            ),
         )
         self.chauffage_predictif_apprentissage_alpha = max(
             0.05,
             min(
                 1.0,
-                float(self.args.get("chauffage_predictif_apprentissage_alpha", 0.25)),
+                float(
+                    self.args.get(
+                        "chauffage_predictif_apprentissage_alpha",
+                        0.25,
+                    )
+                ),
             ),
+        )
+
+        # Stored one level above the HACS package so package updates do not erase
+        # weeks of thermal learning.
+        default_learning_file = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "pool_manager_thermal_learning.json",
+        )
+        self.chauffage_predictif_learning_file = str(
+            self.args.get(
+                "chauffage_predictif_learning_file",
+                default_learning_file,
+            )
         )
 
         self.chauffage_predictif_forecast = []
@@ -237,12 +230,14 @@ class PredictiveHeatingSupport:
         self.chauffage_predictif_last_plan = None
         self.chauffage_predictif_last_log_signature = None
         self.chauffage_predictif_last_status_signature = None
-        self.chauffage_predictif_last_rate = self.chauffage_predictif_gain_chauffe_c_par_h
 
         self.chauffage_predictif_rate_model = {}
-        self.chauffage_predictif_learning_started_at = None
-        self.chauffage_predictif_learning_water_c = None
-        self.chauffage_predictif_learning_ambient_c = None
+        self.chauffage_predictif_loss_model = {}
+        self._heating_learning_session = None
+        self._night_learning_session = None
+        self._load_predictive_learning()
+
+    # ----------------------------- forecast cache -----------------------------
 
     def _predictive_forecast_age_s(self):
         if self.chauffage_predictif_forecast_at is None:
@@ -255,11 +250,10 @@ class PredictiveHeatingSupport:
         )
 
     def _refresh_predictive_forecast(self):
-        """Fetch and cache Home Assistant daily forecasts."""
         if not self.entity_meteo_chauffage_predictif:
             self._fault(
                 "chauffage_predictif_meteo",
-                "chauffage prédictif sans entité météo; réserve thermique seulement",
+                "chauffage prédictif sans entité météo",
             )
             return self.chauffage_predictif_forecast
 
@@ -297,7 +291,7 @@ class PredictiveHeatingSupport:
                 "chauffage_predictif_meteo",
                 f"{len(normalized)} jours de prévision disponibles",
             )
-            return self.chauffage_predictif_forecast
+            return normalized
         except Exception as exc:
             age = self._predictive_forecast_age_s()
             if (
@@ -307,24 +301,81 @@ class PredictiveHeatingSupport:
             ):
                 self._fault(
                     "chauffage_predictif_meteo",
-                    f"prévision météo non actualisée ({exc}); cache "
-                    f"{age / 3600.0:.1f} h utilisé",
+                    f"prévision non actualisée ({exc}); cache utilisé",
                 )
                 return self.chauffage_predictif_forecast
-
             self.chauffage_predictif_forecast = []
             self._fault(
                 "chauffage_predictif_meteo",
-                f"prévisions météo indisponibles ({exc}); réserve thermique seulement",
+                f"prévisions météo indisponibles ({exc})",
             )
             return []
 
-    def _predictive_water_temperature(self):
-        """Use physical water only when circulation is representative.
+    # -------------------------- persistent learning --------------------------
 
-        While stopped, prefer the persisted thermal reference instead of trusting
-        a pipe sensor that can remain numerically available but stale.
-        """
+    def _load_predictive_learning(self):
+        try:
+            with open(
+                self.chauffage_predictif_learning_file,
+                "r",
+                encoding="utf-8",
+            ) as handle:
+                payload = json.load(handle)
+            if isinstance(payload, dict):
+                self.chauffage_predictif_rate_model = dict(
+                    payload.get("heating") or {}
+                )
+                self.chauffage_predictif_loss_model = dict(
+                    payload.get("night_loss") or {}
+                )
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            try:
+                self.log(
+                    f"Apprentissage thermique: lecture impossible ({exc})",
+                    log="piscine_log",
+                )
+            except Exception:
+                pass
+
+    def _save_predictive_learning(self):
+        if not self.chauffage_predictif_apprentissage:
+            return
+        payload = {
+            "version": 1,
+            "updated_at": datetime.datetime.now().isoformat(),
+            "heating": self.chauffage_predictif_rate_model,
+            "night_loss": self.chauffage_predictif_loss_model,
+        }
+        path = self.chauffage_predictif_learning_file
+        tmp = f"{path}.tmp"
+        try:
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as handle:
+                json.dump(
+                    payload,
+                    handle,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            os.replace(tmp, path)
+        except Exception as exc:
+            try:
+                self.log(
+                    f"Apprentissage thermique: sauvegarde impossible ({exc})",
+                    log="piscine_log",
+                )
+            except Exception:
+                pass
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except Exception:
+                pass
+
+    def _predictive_water_temperature(self):
+        """Use physical water only after representative circulation."""
         raw = None
         try:
             raw = self._raw_float(self.args.get("temperature_eau"))
@@ -339,132 +390,335 @@ class PredictiveHeatingSupport:
             memory = self._raw_float(self.args.get("mem_temp"))
         except Exception:
             memory = None
-        if memory is not None:
-            return memory
-        return raw
+        return memory if memory is not None else raw
+
+    def _predictive_physical_water(self):
+        if not self._pump_flow_ok() or getattr(self, "fin_tempo", 0) != 1:
+            return None
+        try:
+            return self._raw_float(self.args.get("temperature_eau"))
+        except Exception:
+            return None
+
+    def _predictive_daylight_active(self):
+        try:
+            return bool(self._daylight_active())
+        except Exception:
+            hour = datetime.datetime.now().hour
+            return 8 <= hour < 20
+
+    def _predictive_daylight_hours(self):
+        try:
+            bounds = self._daylight_bounds()
+            if bounds is not None:
+                start, end = bounds
+                return max(
+                    4.0,
+                    min(
+                        18.0,
+                        (end - start).total_seconds() / 3600.0,
+                    ),
+                )
+        except Exception:
+            pass
+        return 12.0
+
+    def _predictive_daylight_hours_remaining(self):
+        try:
+            bounds = self._daylight_bounds()
+            if bounds is not None:
+                start, end = bounds
+                now = (
+                    datetime.datetime.now(end.tzinfo)
+                    if end.tzinfo
+                    else datetime.datetime.now()
+                )
+                if now >= end:
+                    return 0.0
+                if now <= start:
+                    return max(
+                        0.0,
+                        (end - start).total_seconds() / 3600.0,
+                    )
+                return max(
+                    0.0,
+                    (end - now).total_seconds() / 3600.0,
+                )
+        except Exception:
+            pass
+
+        now = datetime.datetime.now()
+        if now.hour < 8:
+            return 12.0
+        if now.hour >= 20:
+            return 0.0
+        return max(
+            0.0,
+            20.0 - (now.hour + now.minute / 60.0),
+        )
+
+    def _predictive_cover_state(self):
+        entity = getattr(self, "entity_volet_piscine", None)
+        if not entity:
+            return "unknown"
+        try:
+            return normalize_cover_state(self.get_state(entity))
+        except Exception:
+            return "unknown"
+
+    def _predictive_pac_preset(self):
+        try:
+            value = self.get_state(
+                self.entity_pac_climate,
+                attribute="preset_mode",
+            )
+            return str(value or self.chauffage_preset_smart)
+        except Exception:
+            return self.chauffage_preset_smart
+
+    def _learn_heating_rate(self, now, water, ambient):
+        active = self._pac_power_active() and water is not None
+        if not active:
+            self._heating_learning_session = None
+            return
+
+        preset = self._predictive_pac_preset()
+        session = self._heating_learning_session
+        if session is None or session.get("preset") != preset:
+            self._heating_learning_session = {
+                "started_at": now,
+                "water": water,
+                "preset": preset,
+                "ambient_sum": float(ambient or 0.0),
+                "ambient_count": 1 if ambient is not None else 0,
+            }
+            return
+
+        if ambient is not None:
+            session["ambient_sum"] += float(ambient)
+            session["ambient_count"] += 1
+
+        elapsed_s = (now - session["started_at"]).total_seconds()
+        if elapsed_s < self.chauffage_predictif_apprentissage_min_s:
+            return
+
+        rate = (
+            float(water) - float(session["water"])
+        ) / (elapsed_s / 3600.0)
+        avg_ambient = (
+            session["ambient_sum"] / session["ambient_count"]
+            if session["ambient_count"]
+            else ambient
+        )
+        before = self.chauffage_predictif_rate_model
+        learned = update_heating_rate_model(
+            before,
+            preset,
+            avg_ambient,
+            rate,
+            alpha=self.chauffage_predictif_apprentissage_alpha,
+        )
+        if learned != before:
+            self.chauffage_predictif_rate_model = learned
+            self._save_predictive_learning()
+            try:
+                self.log(
+                    f"Apprentissage PAC {preset}: {rate:.3f} °C/h "
+                    f"à {avg_ambient if avg_ambient is not None else '?'} °C",
+                    log="piscine_log",
+                )
+            except Exception:
+                pass
+
+        self._heating_learning_session = {
+            "started_at": now,
+            "water": water,
+            "preset": preset,
+            "ambient_sum": float(ambient or 0.0),
+            "ambient_count": 1 if ambient is not None else 0,
+        }
+
+    def _learn_night_loss(self, now, water, ambient):
+        daylight = self._predictive_daylight_active()
+        pac_active = self._pac_power_active()
+        cover = self._predictive_cover_state()
+        session = self._night_learning_session
+
+        if not daylight:
+            if pac_active:
+                self._night_learning_session = None
+                return
+            if session is None:
+                reference = self._predictive_water_temperature()
+                if reference is None:
+                    return
+                self._night_learning_session = {
+                    "started_at": now,
+                    "ended_at": None,
+                    "water": float(reference),
+                    "cover": cover,
+                    "cover_valid": True,
+                    "ambient_sum": float(ambient or 0.0),
+                    "ambient_count": 1 if ambient is not None else 0,
+                }
+                return
+            if session.get("ended_at") is None:
+                if cover != session.get("cover"):
+                    session["cover_valid"] = False
+                if ambient is not None:
+                    session["ambient_sum"] += float(ambient)
+                    session["ambient_count"] += 1
+            return
+
+        if session is None:
+            return
+
+        # Any daytime PAC run before the first representative post-night water
+        # measurement would contaminate the passive-loss sample.
+        if pac_active:
+            self._night_learning_session = None
+            return
+
+        if session.get("ended_at") is None:
+            session["ended_at"] = now
+
+        # Wait for the first representative physical water measurement after
+        # sunrise; discard the sample if circulation comes much too late.
+        if water is None:
+            if (
+                now - session["ended_at"]
+            ).total_seconds() > 3 * 3600:
+                self._night_learning_session = None
+            return
+
+        duration_s = (
+            session["ended_at"] - session["started_at"]
+        ).total_seconds()
+        if (
+            duration_s < 4 * 3600
+            or not session.get("cover_valid", True)
+        ):
+            self._night_learning_session = None
+            return
+
+        loss_rate = (
+            float(session["water"]) - float(water)
+        ) / (duration_s / 3600.0)
+        avg_ambient = (
+            session["ambient_sum"] / session["ambient_count"]
+            if session["ambient_count"]
+            else ambient
+        )
+        before = self.chauffage_predictif_loss_model
+        learned = update_loss_model(
+            before,
+            session.get("cover"),
+            session["water"],
+            avg_ambient,
+            loss_rate,
+            alpha=self.chauffage_predictif_apprentissage_alpha,
+        )
+        if learned != before:
+            self.chauffage_predictif_loss_model = learned
+            self._save_predictive_learning()
+            try:
+                self.log(
+                    f"Apprentissage pertes nuit: {loss_rate:.3f} °C/h "
+                    f"(air {avg_ambient if avg_ambient is not None else '?'} °C, "
+                    f"volet {session.get('cover')})",
+                    log="piscine_log",
+                )
+            except Exception:
+                pass
+        self._night_learning_session = None
+
+    def _update_predictive_learning(self):
+        if not self.chauffage_predictif_apprentissage:
+            return
+
+        now = datetime.datetime.now()
+        water = self._predictive_physical_water()
+        ambient = self._raw_float(
+            getattr(self, "entity_temperature_exterieure", None)
+        )
+        self._learn_heating_rate(now, water, ambient)
+        self._learn_night_loss(now, water, ambient)
+
+    # --------------------------- planning + status ---------------------------
 
     def _predictive_profile_floor_delta(self, kind):
         if kind == "end_season":
             return self.chauffage_predictif_plancher_fin_saison_delta_c
         return self.chauffage_predictif_plancher_auto_delta_c
 
-    def _update_predictive_learning(self):
-        """Learn real PAC heating speed in broad outdoor-temperature buckets."""
-        if not self.chauffage_predictif_apprentissage:
-            return
-
-        try:
-            active = self._pac_power_active() and self._pump_flow_ok()
-        except Exception:
-            active = False
-
-        if not active:
-            self.chauffage_predictif_learning_started_at = None
-            self.chauffage_predictif_learning_water_c = None
-            self.chauffage_predictif_learning_ambient_c = None
-            return
-
-        try:
-            water = self._physical_water_temperature()
-        except Exception:
-            water = self._raw_float(self.args.get("temperature_eau"))
-        ambient = self._raw_float(
-            getattr(self, "entity_temperature_exterieure", None)
-        )
-        if water is None:
-            return
-
-        now = datetime.datetime.now()
-        if self.chauffage_predictif_learning_started_at is None:
-            self.chauffage_predictif_learning_started_at = now
-            self.chauffage_predictif_learning_water_c = water
-            self.chauffage_predictif_learning_ambient_c = ambient
-            return
-
-        elapsed_s = (
-            now - self.chauffage_predictif_learning_started_at
-        ).total_seconds()
-        if elapsed_s < self.chauffage_predictif_apprentissage_min_s:
-            return
-
-        start_water = self.chauffage_predictif_learning_water_c
-        if start_water is None:
-            self.chauffage_predictif_learning_started_at = now
-            self.chauffage_predictif_learning_water_c = water
-            self.chauffage_predictif_learning_ambient_c = ambient
-            return
-
-        rate = (float(water) - float(start_water)) / (elapsed_s / 3600.0)
-        sample_ambient = (
-            self.chauffage_predictif_learning_ambient_c
-            if self.chauffage_predictif_learning_ambient_c is not None
-            else ambient
-        )
-        previous = dict(self.chauffage_predictif_rate_model)
-        self.chauffage_predictif_rate_model = update_heating_rate_model(
-            previous,
-            sample_ambient,
-            rate,
-            alpha=self.chauffage_predictif_apprentissage_alpha,
-        )
-        if self.chauffage_predictif_rate_model != previous:
-            try:
-                self.log(
-                    f"Apprentissage PAC: {rate:.3f} °C/h à "
-                    f"{sample_ambient if sample_ambient is not None else '?'} °C",
-                    log="piscine_log",
-                )
-            except Exception:
-                pass
-
-        self.chauffage_predictif_learning_started_at = now
-        self.chauffage_predictif_learning_water_c = water
-        self.chauffage_predictif_learning_ambient_c = ambient
-
-    def _estimate_predictive_heating_rate(self, forecast):
-        ambient = self._raw_float(
-            getattr(self, "entity_temperature_exterieure", None)
-        )
-
-        opportunities = find_swim_opportunities(
-            forecast,
-            datetime.datetime.now(),
+    def _build_runtime_predictive_plan(
+        self,
+        kind,
+        water,
+        target,
+        forecast,
+    ):
+        day_hours = self._predictive_daylight_hours()
+        remaining = self._predictive_daylight_hours_remaining()
+        return build_predictive_plan(
+            now=datetime.datetime.now(),
+            water_c=water,
+            target_c=target,
+            forecast=forecast,
+            base_heating_rate_c_per_h=(
+                self.chauffage_predictif_gain_chauffe_c_par_h
+            ),
+            heating_rate_model=self.chauffage_predictif_rate_model,
+            loss_model=self.chauffage_predictif_loss_model,
+            cover_state=self._predictive_cover_state(),
+            floor_delta_c=self._predictive_profile_floor_delta(kind),
+            minimum_water_c=(
+                self.chauffage_predictif_temperature_min_eau_c
+            ),
+            floor_recharge_c=self.chauffage_predictif_recharge_plancher_c,
+            stop_margin_c=self.chauffage_predictif_marge_arret_c,
             score_min=self.chauffage_predictif_score_baignade_min,
             min_air_c=self.chauffage_predictif_temperature_baignade_min_c,
-            swim_time=self.chauffage_predictif_heure_baignade,
+            smart_preset=self.chauffage_preset_smart,
+            turbo_preset=self.chauffage_preset_turbo,
+            day_hours=day_hours,
+            today_day_hours_remaining=remaining,
+            night_hours=max(6.0, 24.0 - day_hours),
+            loss_fallback_delta10_c_per_h=(
+                self.chauffage_predictif_perte_nuit_delta10_c_par_h
+            ),
+            daylight_active=self._predictive_daylight_active(),
         )
-        if opportunities:
-            candidate = opportunities[0]
-            previous_index = max(0, int(candidate["index"]) - 1)
-            if previous_index < len(forecast):
-                predicted = forecast[previous_index].get("temperature")
-                try:
-                    ambient = float(predicted)
-                except (TypeError, ValueError):
-                    pass
 
-        rate = estimate_heating_rate(
-            self.chauffage_predictif_gain_chauffe_c_par_h,
-            ambient,
-            learned_model=self.chauffage_predictif_rate_model,
+    @staticmethod
+    def _iso_date(value):
+        return (
+            value.isoformat()
+            if isinstance(value, datetime.date)
+            else None
         )
-        self.chauffage_predictif_last_rate = rate
-        return rate
 
     @staticmethod
     def _iso_datetime(value):
-        return value.isoformat() if isinstance(value, datetime.datetime) else None
+        return (
+            value.isoformat()
+            if isinstance(value, datetime.datetime)
+            else None
+        )
 
-    def _predictive_status_state(self, plan, kind, override=None):
+    def _predictive_status_state(
+        self,
+        plan,
+        kind,
+        override=None,
+    ):
         if override:
             return override
         if plan and plan.get("should_heat"):
-            return "🔥 Chauffe maintenant"
-        next_segment = (plan or {}).get("next_segment")
-        if next_segment:
-            return f"🔥 {next_segment['start'].strftime('%a %H:%M')}"
-        candidate = (plan or {}).get("candidate")
-        if candidate:
+            preset = plan.get("preset") or self.chauffage_preset_smart
+            return f"🔥 {preset}"
+        candidate = (plan or {}).get("candidate") or {}
+        if candidate.get("date") is not None:
             return f"🏊 {candidate['date'].strftime('%a %d/%m')}"
         if kind == "end_season":
             return "⏸ Fin de saison"
@@ -478,26 +732,12 @@ class PredictiveHeatingSupport:
         kind,
         water,
         target,
-        rate,
         override=None,
     ):
         if not self.entity_chauffage_predictif_status:
             return
 
         candidate = (plan or {}).get("candidate") or {}
-        active = (plan or {}).get("active_segment") or {}
-        next_segment = (plan or {}).get("next_segment") or {}
-        schedule = []
-        for item in (plan or {}).get("schedule") or []:
-            schedule.append(
-                {
-                    "start": self._iso_datetime(item.get("start")),
-                    "end": self._iso_datetime(item.get("end")),
-                    "hours": item.get("hours"),
-                    "kind": item.get("kind"),
-                }
-            )
-
         rows = dashboard_forecast(
             forecast,
             plan or {},
@@ -509,59 +749,75 @@ class PredictiveHeatingSupport:
             "mode": kind,
             "enabled": bool(self.chauffage_predictif),
             "water_temperature": (
-                round(float(water), 1) if water is not None else None
-            ),
-            "target_temperature": (
-                round(float(target), 1) if target is not None else None
-            ),
-            "floor_temperature": (plan or {}).get("floor_c"),
-            "heating_rate_c_per_h": round(float(rate), 3) if rate else None,
-            "heating_now": bool((plan or {}).get("should_heat")),
-            "heat_target_temperature": (plan or {}).get("heat_target_c"),
-            "reason": (plan or {}).get("reason"),
-            "next_swim_date": (
-                candidate.get("date").isoformat()
-                if candidate.get("date") is not None
+                round(float(water), 1)
+                if water is not None
                 else None
             ),
+            "target_temperature": (
+                round(float(target), 1)
+                if target is not None
+                else None
+            ),
+            "floor_temperature": (plan or {}).get("floor_c"),
+            "heating_now": bool((plan or {}).get("should_heat")),
+            "heat_target_temperature": (plan or {}).get(
+                "heat_target_c"
+            ),
+            "recommended_preset": (plan or {}).get("preset"),
+            "night_heating_allowed": bool(
+                (plan or {}).get("allow_night")
+            ),
+            "reason": (plan or {}).get("reason"),
+            "next_swim_date": self._iso_date(candidate.get("date")),
             "next_swim_score": candidate.get("score"),
-            "next_swim_strategic_score": candidate.get("strategic_score"),
+            "next_swim_strategic_score": candidate.get(
+                "strategic_score"
+            ),
             "next_swim_confidence": candidate.get("confidence"),
             "next_swim_condition": candidate.get("condition"),
-            "forecast_horizon_days": self.chauffage_predictif_horizon_jours,
-            "operational_horizon_days": self.chauffage_predictif_horizon_operationnel_jours,
-            "last_chance": bool(candidate.get("last_chance")),
-            "swim_datetime": self._iso_datetime(candidate.get("swim_datetime")),
-            "ready_by": self._iso_datetime((plan or {}).get("ready_datetime")),
-            "required_hours": (plan or {}).get("required_hours"),
-            "scheduled_hours": (plan or {}).get("scheduled_hours"),
-            "active_heating_start": self._iso_datetime(active.get("start")),
-            "active_heating_end": self._iso_datetime(active.get("end")),
-            "next_heating_start": self._iso_datetime(next_segment.get("start")),
-            "next_heating_end": self._iso_datetime(next_segment.get("end")),
-            "schedule": schedule,
+            "recovery_start_date": self._iso_date(
+                (plan or {}).get("recovery_start_date")
+            ),
+            "required_gain_c": (plan or {}).get("required_gain_c"),
+            "predicted_night_loss_c": (plan or {}).get(
+                "predicted_loss_c"
+            ),
+            "projected_without_heat_c": (plan or {}).get(
+                "projected_without_heat_c"
+            ),
+            "estimated_capacity_c": (plan or {}).get(
+                "estimated_capacity_c"
+            ),
+            "forecast_horizon_days": (
+                self.chauffage_predictif_horizon_jours
+            ),
             "forecast": rows,
-            "learned_heating_rates": self.chauffage_predictif_rate_model,
+            "learned_heating_rates": (
+                self.chauffage_predictif_rate_model
+            ),
+            "learned_night_losses": (
+                self.chauffage_predictif_loss_model
+            ),
             "forecast_updated_at": self._iso_datetime(
                 self.chauffage_predictif_forecast_at
             ),
         }
 
-        state = self._predictive_status_state(plan, kind, override=override)
+        state = self._predictive_status_state(
+            plan,
+            kind,
+            override=override,
+        )
         signature = (
             state,
             attributes.get("water_temperature"),
             attributes.get("target_temperature"),
             attributes.get("heating_now"),
+            attributes.get("recommended_preset"),
+            attributes.get("night_heating_allowed"),
             attributes.get("next_swim_date"),
-            attributes.get("next_swim_score"),
-            attributes.get("next_heating_start"),
-            attributes.get("next_heating_end"),
+            attributes.get("recovery_start_date"),
             attributes.get("reason"),
-            tuple(
-                (slot.get("start"), slot.get("end"), slot.get("kind"))
-                for slot in schedule
-            ),
             attributes.get("forecast_updated_at"),
         )
         if signature == self.chauffage_predictif_last_status_signature:
@@ -581,57 +837,45 @@ class PredictiveHeatingSupport:
                 f"publication diagnostic prédictif impossible: {exc}",
             )
 
-    def _log_predictive_plan(self, plan, water, target, kind):
+    def _log_predictive_plan(
+        self,
+        plan,
+        water,
+        target,
+        kind,
+    ):
         candidate = (plan or {}).get("candidate") or {}
-        next_segment = (plan or {}).get("next_segment") or {}
         signature = (
             kind,
             bool((plan or {}).get("should_heat")),
-            (plan or {}).get("heat_target_c"),
+            (plan or {}).get("preset"),
+            bool((plan or {}).get("allow_night")),
             candidate.get("date"),
-            bool(candidate.get("last_chance")),
-            next_segment.get("start"),
+            (plan or {}).get("recovery_start_date"),
             str((plan or {}).get("reason") or ""),
         )
         if signature == self.chauffage_predictif_last_log_signature:
             return
+
         self.chauffage_predictif_last_log_signature = signature
         try:
             self.log(
-                f"Chauffage prédictif [{kind}]: eau {water:.1f}/{target:.1f} °C | "
+                f"Chauffage prédictif [{kind}]: "
+                f"eau {water:.1f}/{target:.1f} °C | "
                 f"{(plan or {}).get('reason', '')}",
                 log="piscine_log",
             )
         except Exception:
             pass
 
-    def _build_runtime_predictive_plan(self, kind, water, target, forecast):
-        rate = self._estimate_predictive_heating_rate(forecast)
-        plan = build_predictive_plan(
-            now=datetime.datetime.now(),
-            water_c=water,
-            target_c=target,
-            forecast=forecast,
-            heating_rate_c_per_h=rate,
-            floor_delta_c=self._predictive_profile_floor_delta(kind),
-            score_min=self.chauffage_predictif_score_baignade_min,
-            min_air_c=self.chauffage_predictif_temperature_baignade_min_c,
-            swim_time=self.chauffage_predictif_heure_baignade,
-            ready_time=self.chauffage_predictif_heure_eau_prete,
-            maintenance_band_c=self.chauffage_predictif_recharge_plancher_c,
-            stop_margin_c=self.chauffage_predictif_marge_arret_c,
-            safety_margin_h=self.chauffage_predictif_marge_planification_h,
-            last_chance_margin_h=self.chauffage_predictif_marge_derniere_occasion_h,
-            previous_day_start=self.chauffage_predictif_veille_debut,
-            previous_day_end=self.chauffage_predictif_veille_fin,
-            morning_start=self.chauffage_predictif_matin_debut,
-            operational_horizon_days=self.chauffage_predictif_horizon_operationnel_jours,
-        )
-        return plan, rate
-
-    def _update_predictive_diagnostics(self, kind, override=None):
+    def _update_predictive_diagnostics(
+        self,
+        kind,
+        override=None,
+    ):
         if not self.chauffage_predictif:
             return None
+
         forecast = self._refresh_predictive_forecast()
         water = self._predictive_water_temperature()
         target = self._pac_target_temperature()
@@ -642,12 +886,14 @@ class PredictiveHeatingSupport:
                 kind=kind,
                 water=water,
                 target=target,
-                rate=self.chauffage_predictif_last_rate,
-                override=override or "⚠️ Température indisponible",
+                override=(
+                    override
+                    or "⚠️ Température indisponible"
+                ),
             )
             return None
 
-        plan, rate = self._build_runtime_predictive_plan(
+        plan = self._build_runtime_predictive_plan(
             kind if kind == "end_season" else "auto",
             water,
             target,
@@ -659,13 +905,11 @@ class PredictiveHeatingSupport:
             kind=kind,
             water=water,
             target=target,
-            rate=rate,
             override=override,
         )
         return plan
 
     def _manage_predictive_heating(self, kind):
-        """Apply the common predictive engine in Auto and End-of-season modes."""
         forecast = self._refresh_predictive_forecast()
         water = self._predictive_water_temperature()
         target = self._pac_target_temperature()
@@ -676,7 +920,8 @@ class PredictiveHeatingSupport:
             self._cancel_chauffage_start()
             self._fault(
                 "chauffage_predictif_temperature",
-                "température eau/consigne PAC indisponible; chauffage prédictif arrêté",
+                "température eau/consigne PAC indisponible; "
+                "chauffage arrêté",
             )
             self._publish_predictive_status(
                 plan={},
@@ -684,7 +929,6 @@ class PredictiveHeatingSupport:
                 kind=kind,
                 water=water,
                 target=target,
-                rate=self.chauffage_predictif_last_rate,
                 override="⚠️ Température indisponible",
             )
             return self._pac_off(
@@ -692,30 +936,39 @@ class PredictiveHeatingSupport:
             )
 
         self._recover("chauffage_predictif_temperature")
-        plan, rate = self._build_runtime_predictive_plan(
+        plan = self._build_runtime_predictive_plan(
             kind,
             water,
             target,
             forecast,
         )
         self.chauffage_predictif_last_plan = plan
-        self._log_predictive_plan(plan, water, target, kind)
+        self._log_predictive_plan(
+            plan,
+            water,
+            target,
+            kind,
+        )
         self._publish_predictive_status(
             plan=plan,
             forecast=forecast,
             kind=kind,
             water=water,
             target=target,
-            rate=rate,
         )
 
         if plan.get("should_heat"):
             self.chauffage_predictif_heat_requested = True
             self.chauffage_predictif_heat_target_c = (
-                plan.get("heat_target_c") or target
+                plan.get("heat_target_c")
+                or target
+            )
+            preset = (
+                plan.get("preset")
+                or self.chauffage_preset_smart
             )
             return self._request_chauffage_start(
-                self.chauffage_preset_smart,
+                preset,
                 f"prédictif {kind}",
             )
 
@@ -723,7 +976,8 @@ class PredictiveHeatingSupport:
         self.chauffage_predictif_heat_target_c = None
         self._cancel_chauffage_start()
         return self._pac_off(
-            f"chauffage prédictif: {plan.get('reason', 'attente')}",
+            f"chauffage prédictif: "
+            f"{plan.get('reason', 'attente')}",
             post=True,
         )
 
@@ -735,7 +989,10 @@ class PredictiveHeatingSupport:
                 return True
             return bool(self.chauffage_predictif_heat_requested)
         if kind == "auto" and self.chauffage_predictif:
-            if hasattr(self, "mode_auto_autorise") and not self.mode_auto_autorise():
+            if (
+                hasattr(self, "mode_auto_autorise")
+                and not self.mode_auto_autorise()
+            ):
                 return False
             return bool(self.chauffage_predictif_heat_requested)
         return False

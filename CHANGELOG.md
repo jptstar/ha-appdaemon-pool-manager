@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.7.0 - Self-learning thermal recovery planner
+
+- Replace the fixed bathing-hour / heating-slot scheduler with a day-level thermal recovery planner.
+- Keep the 15-day weather outlook, but only act when the learned pool/PAC behavior says recovery must really begin.
+- Learn real PAC water-heating gain in °C/h separately by outdoor-temperature range and PAC preset (Smart, Turbo, etc.).
+- Learn passive night cooling in °C/h from water/air temperature difference and pool-cover state.
+- Persist both learned models outside the HACS-managed package so AppDaemon restarts and HACS upgrades keep the thermal history.
+- Skip a weather-friendly day when the pool is no longer thermally recoverable in time instead of marking it as a bathing day anyway.
+- Calculate the actual recovery start day instead of using fixed J-2/J-5 rules.
+- Prefer Smart daytime heating, then Turbo daytime, then allow night heating only when daytime capacity is insufficient.
+- Apply the same bad-weather stop/restart strategy in Automatique and Fin de saison Smart.
+- Add an optional absolute minimum-water-temperature floor to keep the pool recoverable through long cold spells.
+- Keep `brassage_nuit_intelligent: false` independent from genuine heating demand: periodic night mixing remains disabled while exceptional pump+PAC night recovery can still be authorized.
+- Remove the synthetic 16:00 bathing deadline, ready-by time, previous-day/morning/emergency slots, operational-horizon gate, last-chance margin logic and predictive slot anti-chatter layer.
+- Remove the obsolete duplicate `pool_end_season.py` planner and its dedicated tests.
+- Replace old slot diagnostics with recovery start date, recommended PAC preset, night-heating requirement, predicted night loss, projected no-heat water temperature and learned-model diagnostics.
+
+
 ## 0.6.1 - 15-day strategic weather outlook
 
 - Extend predictive weather ingestion from 10 to 15 days when the configured Home Assistant provider supplies that range.

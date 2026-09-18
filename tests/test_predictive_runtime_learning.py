@@ -103,20 +103,25 @@ def test_thermal_learning_is_persisted_and_reloaded(tmp_path):
     )
 
 
-def test_below_70_percent_never_certifies_temperature(tmp_path):
+def test_below_70_percent_does_not_count_toward_certification(tmp_path):
     app = _make_runtime(tmp_path)
     app.speed = 60
     app.chauffage_predictif_measurement_active = True
     app.chauffage_predictif_measurement_purpose = "decision"
 
     start = datetime.datetime(2026, 9, 18, 8, 0)
-    for minutes in (0, 5, 15, 30):
-        app._update_certified_measurement(
-            start + datetime.timedelta(minutes=minutes)
-        )
+    app._update_certified_measurement(start)
 
+    # The explicit request raises the pump to 70%; the 15-minute certification
+    # timer therefore starts only on the next observation, not at 08:00.
+    assert app.speed == 70
+    app._update_certified_measurement(start + datetime.timedelta(minutes=5))
+    assert app.chauffage_predictif_measurement_started_at == (
+        start + datetime.timedelta(minutes=5)
+    )
+
+    app._update_certified_measurement(start + datetime.timedelta(minutes=15))
     assert app.chauffage_predictif_certified_water_c is None
-    assert app.chauffage_predictif_measurement_started_at is None
 
 
 def test_temperature_certifies_after_15_minutes_at_70_plus_stability(tmp_path):

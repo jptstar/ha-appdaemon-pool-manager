@@ -213,8 +213,14 @@ def test_smart_is_used_when_today_capacity_is_enough():
         ],
     )
     learned = {
-        "smart": {"15_20": {"rate": 0.50, "count": 20}},
-        "turbo": {"15_20": {"rate": 0.75, "count": 20}},
+        "smart": {
+            "15_20": {"rate": 0.80, "count": 20},
+            "20_25": {"rate": 0.80, "count": 20},
+        },
+        "turbo": {
+            "15_20": {"rate": 1.00, "count": 20},
+            "20_25": {"rate": 1.00, "count": 20},
+        },
     }
     plan = _plan(
         now,

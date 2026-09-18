@@ -233,49 +233,58 @@ def enrich_daily_with_hourly(daily_forecast, hourly_forecast):
     """Add near-term hourly context to daily rows.
 
     Weekdays prioritize 16:00-20:00 because that is the normal after-work
-    bathing period. Weekends prioritize 11:00-20:00.  Heating performance uses
+    bathing period. Weekends prioritize 11:00-20:00. Heating performance uses
     the average 08:00-20:00 outdoor temperature instead of the daily maximum.
+
+    A row's night temperature represents the *following* night: 20:00-24:00 on
+    that date plus 00:00-08:00 on the next date.
     """
     rows = [dict(item) for item in (daily_forecast or [])]
-    hourly_by_date = {}
+    samples = []
     for item in hourly_forecast or []:
         dt = item.get("parsed_datetime") or _parse_datetime(item.get("datetime"))
-        if dt is None:
-            continue
-        hourly_by_date.setdefault(dt.date(), []).append((dt, item))
+        if dt is not None:
+            samples.append((dt, item))
 
     for row in rows:
         day = row.get("date")
-        samples = hourly_by_date.get(day) or []
-        if not samples:
+        if day is None:
             continue
 
-        daytime = [
-            _number(item.get("temperature"))
+        daytime_samples = [
+            item
             for dt, item in samples
-            if 8 <= dt.hour < 20
+            if dt.date() == day and 8 <= dt.hour < 20
         ]
-        night = [
-            _number(item.get("temperature"))
+        following_day = day + datetime.timedelta(days=1)
+        night_samples = [
+            item
             for dt, item in samples
-            if dt.hour >= 20 or dt.hour < 8
-        ]
-        usage_start = 11 if day.weekday() >= 5 else 16
-        usage = [
-            _number(item.get("score"))
-            for dt, item in samples
-            if usage_start <= dt.hour < 20
-        ]
-        usage_temp = [
-            _number(item.get("temperature"))
-            for dt, item in samples
-            if usage_start <= dt.hour < 20
+            if (
+                (dt.date() == day and dt.hour >= 20)
+                or (dt.date() == following_day and dt.hour < 8)
+            )
         ]
 
-        day_temp = _average(daytime)
-        night_temp = _average(night)
-        usage_score = _average(usage)
-        usage_temperature = _average(usage_temp)
+        usage_start = 11 if day.weekday() >= 5 else 16
+        usage_samples = [
+            item
+            for dt, item in samples
+            if dt.date() == day and usage_start <= dt.hour < 20
+        ]
+
+        day_temp = _average(
+            [_number(item.get("temperature")) for item in daytime_samples]
+        )
+        night_temp = _average(
+            [_number(item.get("temperature")) for item in night_samples]
+        )
+        usage_score = _average(
+            [_number(item.get("score")) for item in usage_samples]
+        )
+        usage_temperature = _average(
+            [_number(item.get("temperature")) for item in usage_samples]
+        )
 
         if day_temp is not None:
             row["heating_temperature"] = round(day_temp, 2)
@@ -286,9 +295,10 @@ def enrich_daily_with_hourly(daily_forecast, hourly_forecast):
             row["usage_score"] = round(usage_score * weight, 1)
         if usage_temperature is not None:
             row["usage_temperature"] = round(usage_temperature, 1)
-        row["usage_window"] = "11:00-20:00" if day.weekday() >= 5 else "16:00-20:00"
+        row["usage_window"] = (
+            "11:00-20:00" if day.weekday() >= 5 else "16:00-20:00"
+        )
     return rows
-
 
 def find_swim_opportunities(
     forecast,

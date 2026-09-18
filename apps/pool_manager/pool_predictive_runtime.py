@@ -1411,23 +1411,29 @@ class PredictiveHeatingSupport:
         # If the PAC is currently active and the model only *estimates* that the
         # trajectory target has been reached, certify the real pool temperature
         # before switching it off. This avoids stopping on an optimistic model.
-        if self._pac_power_active() and not self._certified_fresh(
-            datetime.datetime.now(),
-            same_day=True,
-        ):
-            self._request_predictive_measurement(
-                "target_check",
-                start_pump=False,
-            )
-            self._publish_predictive_status(
-                plan=plan,
-                forecast=forecast,
-                kind=kind,
-                water=water,
-                target=target,
-                override="🌀 Vérification température",
-            )
-            return
+        if self._pac_power_active():
+            certified_age = self._certified_age_s(datetime.datetime.now())
+            # A same-day morning certification can be several hours old. Never
+            # stop an active PAC solely because the learned model *estimates*
+            # that the trajectory target has been reached: obtain a fresh
+            # 70%/15-minute pool measurement first.
+            if (
+                certified_age is None
+                or certified_age > self.chauffage_predictif_mesure_tempo_s
+            ):
+                self._request_predictive_measurement(
+                    "target_check",
+                    start_pump=False,
+                )
+                self._publish_predictive_status(
+                    plan=plan,
+                    forecast=forecast,
+                    kind=kind,
+                    water=water,
+                    target=target,
+                    override="🌀 Vérification température",
+                )
+                return
 
         self.chauffage_predictif_heat_requested = False
         self.chauffage_predictif_heat_target_c = None

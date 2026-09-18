@@ -80,53 +80,54 @@ pool_manager:
   chauffage_preset_turbo: Turbo
   chauffage_debut_saison_marge_c: 0.3
 
-  # v0.6.0 season-wide predictive heating. When enabled it is used in both
-  # Automatique and Fin de saison. Début de saison heats to setpoint and then
-  # automatically switches the selector to Automatique.
+  # v0.7 self-learning predictive heating. The same engine is used in
+  # Automatique and Fin de saison • Smart.
   chauffage_predictif: false
   entity_meteo_chauffage_predictif: weather.home
 
-  # Optional virtual sensor published by AppDaemon for Mushroom/dashboard use.
+  # Optional virtual sensor published by AppDaemon for dashboard use.
   # No Home Assistant helper is required; choose a unique sensor entity id.
   entity_chauffage_predictif_status: sensor.pool_predictive_heating
 
+  # Weather outlook. Up to 15 days remain visible; heating only starts when the
+  # learned thermal model says recovery really needs to begin.
   chauffage_predictif_horizon_jours: 15
-  chauffage_predictif_horizon_operationnel_jours: 3
   chauffage_predictif_prevision_refresh_s: 1800
   chauffage_predictif_prevision_max_age_s: 21600
 
-  # Bathing opportunity score: temperature + sun/clouds - rain - wind.
+  # Bathing-day score: outdoor temperature + sun/clouds - rain - wind.
   chauffage_predictif_temperature_baignade_min_c: 21
   chauffage_predictif_temperature_baignade_ideale_c: 26
   chauffage_predictif_score_baignade_min: 55
-  chauffage_predictif_heure_baignade: "16:00:00"
 
-  # The water should normally be ready before late morning. Heating is planned
-  # first on the previous day; target-day morning is only a top-up window.
-  chauffage_predictif_heure_eau_prete: "11:00:00"
-  chauffage_predictif_veille_debut: "12:00:00"
-  chauffage_predictif_veille_fin: "20:00:00"
-  chauffage_predictif_matin_debut: "07:00:00"
-
-  # Initial PAC model. Runtime learning refines °C/h in outdoor-temperature bins.
+  # Initial fallback only. Pool Manager learns real °C/h separately for each
+  # PAC preset (Smart, Turbo, etc.) and outdoor-temperature range.
   chauffage_predictif_gain_chauffe_c_par_h: 0.30
+
+  # Initial passive-night-loss fallback at ΔT water/air = 10 °C.
+  # Real night losses are learned automatically, including cover state.
+  chauffage_predictif_perte_nuit_delta10_c_par_h: 0.05
+
   chauffage_predictif_apprentissage: true
   chauffage_predictif_apprentissage_min_s: 1800
   chauffage_predictif_apprentissage_alpha: 0.25
 
-  # Automatic keeps more thermal reserve during a long bad-weather spell;
-  # End of season allows a larger drift before preserving recoverability.
+  # Optional absolute recoverability floor. When set, the water will not be
+  # deliberately allowed below this temperature, even through a long bad spell.
+  # chauffage_predictif_temperature_min_eau_c: 22
+
+  # Compatibility fallback when no absolute minimum is configured.
   chauffage_predictif_plancher_auto_delta_c: 2.0
   chauffage_predictif_plancher_fin_saison_delta_c: 4.0
   chauffage_predictif_recharge_plancher_c: 0.5
-
   chauffage_predictif_marge_arret_c: 0.2
-  chauffage_predictif_marge_planification_h: 0.5
-  chauffage_predictif_marge_derniere_occasion_h: 1.0
 
-  # v0.5 fin_saison_* keys are accepted as migration aliases. If an existing
-  # configuration has `fin_saison_predictif: true`, v0.6 upgrades it to the
-  # common season-wide engine.
+  # Learning is persisted automatically one level above the HACS package.
+  # Override only if your AppDaemon filesystem requires another writable path.
+  # chauffage_predictif_learning_file: /config/appdaemon/pool_manager_thermal_learning.json
+
+  # v0.5 fin_saison_* names remain accepted as migration aliases where useful.
+  # The old bathing-hour / fixed heating-window scheduler is intentionally gone.
 
   # Legacy v0.2.x-v0.4.3 compatibility only. Do not configure this together with
   # a new HA automation that also controls the v0.4.4 selector.

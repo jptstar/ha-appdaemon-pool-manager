@@ -107,6 +107,44 @@ def test_hourly_context_uses_after_work_window_on_weekday():
     assert opportunities == []
 
 
+def test_hourly_night_temperature_uses_evening_plus_following_morning():
+    day = datetime.date(2026, 9, 18)
+    daily = pool_predictive.normalize_daily_forecast(
+        [{
+            "datetime": datetime.datetime.combine(day, datetime.time(12)).isoformat(),
+            "temperature": 24,
+            "templow": 12,
+            "condition": "sunny",
+        }]
+    )
+    hourly = pool_predictive.normalize_hourly_forecast(
+        [
+            {
+                "datetime": datetime.datetime.combine(day, datetime.time(21)).isoformat(),
+                "temperature": 14,
+                "condition": "clear-night",
+            },
+            {
+                "datetime": datetime.datetime.combine(
+                    day + datetime.timedelta(days=1),
+                    datetime.time(6),
+                ).isoformat(),
+                "temperature": 10,
+                "condition": "clear-night",
+            },
+            {
+                # Previous-night sample on the same calendar date must not be
+                # mixed into the following night.
+                "datetime": datetime.datetime.combine(day, datetime.time(6)).isoformat(),
+                "temperature": 4,
+                "condition": "clear-night",
+            },
+        ]
+    )
+    enriched = pool_predictive.enrich_daily_with_hourly(daily, hourly)
+    assert enriched[0]["night_heating_temperature"] == 12.0
+
+
 def test_weekend_gets_usage_priority_over_marginal_friday():
     # Friday + Saturday. Saturday is only modestly better but is the more useful
     # bathing day and receives the weekend bonus.

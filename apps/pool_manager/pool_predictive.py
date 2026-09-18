@@ -1,7 +1,19 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Copyright (C) 2026 jptstar
 
-"""Pure helpers for season-wide predictive pool heating."""
+"""Pure weather + thermal helpers for predictive pool heating.
+
+The planner intentionally works at *day* level:
+- weather identifies credible bathing days up to 15 days ahead;
+- a learned thermal model estimates PAC gain by outdoor temperature/preset;
+- a learned passive-loss model estimates overnight cooling;
+- recovery is planned backwards from the selected bathing day;
+- daytime Smart heating is preferred; Turbo and then night heating are used
+  only when needed to keep a future bathing day thermally reachable.
+
+There is deliberately no synthetic "bathing hour" and no hard-coded
+morning/afternoon heating slot.
+"""
 
 import datetime
 
@@ -22,6 +34,15 @@ _CONDITION_SUN_FACTOR = {
     "snowy": 0.05,
     "snowy-rainy": 0.00,
     "exceptional": 0.00,
+}
+
+_PRESET_FALLBACK_FACTOR = {
+    "eco": 0.82,
+    "silent": 0.86,
+    "standard": 0.95,
+    "smart": 1.00,
+    "boost": 1.15,
+    "turbo": 1.25,
 }
 
 
@@ -49,32 +70,13 @@ def _parse_datetime(value):
         return None
 
 
-def _parse_time(value, default="16:00:00"):
-    text = str(value or default).strip()
-    try:
-        return datetime.time.fromisoformat(text)
-    except ValueError:
-        return datetime.time.fromisoformat(default)
-
-
-def _combine(day, value, tzinfo=None, default="16:00:00"):
-    result = datetime.datetime.combine(day, _parse_time(value, default))
-    if tzinfo is not None:
-        result = result.replace(tzinfo=tzinfo)
-    return result
-
-
 def swim_day_score(
     entry,
     min_air_c=21.0,
     ideal_air_c=26.0,
     wind_penalty_from=15.0,
 ):
-    """Return a 0..100 bathing-opportunity score.
-
-    Temperature and sunshine dominate. Rain probability/amount and strong wind
-    reduce the score. Missing optional fields are ignored instead of guessed.
-    """
+    """Return a 0..100 bathing-opportunity score from daily weather."""
     temperature = _number(entry.get("temperature"))
     if temperature is None:
         return 0.0
@@ -130,27 +132,8 @@ def swim_day_score(
     )
 
 
-def heating_day_quality(entry):
-    """Return a 0..100 score for favorable daytime PAC/PV heating."""
-    temperature = _number(entry.get("temperature"))
-    if temperature is None:
-        temp_factor = 0.5
-    else:
-        temp_factor = _clamp((temperature - 5.0) / 25.0, 0.0, 1.0)
-
-    condition = str(entry.get("condition") or "").strip().lower()
-    sun_factor = _CONDITION_SUN_FACTOR.get(condition, 0.45)
-    cloud = _number(entry.get("cloud_coverage"))
-    if cloud is not None:
-        cloud_factor = 1.0 - _clamp(cloud, 0.0, 100.0) / 100.0
-        sun_factor = 0.70 * sun_factor + 0.30 * cloud_factor
-
-    score = 60.0 * temp_factor + 40.0 * _clamp(sun_factor, 0.0, 1.0)
-    return round(_clamp(score, 0.0, 100.0), 1)
-
-
 def forecast_horizon_profile(index):
-    """Return confidence/weight for the 15-day strategic outlook."""
+    """Return a confidence label + weighting for a 15-day outlook."""
     index = max(0, int(index))
     if index <= 3:
         return {"confidence": "strong", "weight": 1.00}
@@ -167,12 +150,7 @@ def normalize_daily_forecast(
     min_air_c=21.0,
     ideal_air_c=26.0,
 ):
-    """Normalize Home Assistant daily forecast entries up to 15 days.
-
-    Raw weather quality remains visible as ``score``. ``strategic_score``
-    applies a distance-confidence weight so far forecasts can inform the
-    outlook without being treated as equally certain as J0-J3.
-    """
+    """Normalize Home Assistant daily forecast entries up to 15 days."""
     result = []
     limit = max(1, min(15, int(horizon_days)))
     for index, raw in enumerate(list(raw_forecast or [])[:limit]):
@@ -190,7 +168,6 @@ def normalize_daily_forecast(
         item["horizon_weight"] = profile["weight"]
         item["confidence"] = profile["confidence"]
         item["forecast_index"] = index
-        item["heating_quality"] = heating_day_quality(item)
         parsed = _parse_datetime(item.get("datetime"))
         item["date"] = parsed.date() if parsed is not None else None
         result.append(item)
@@ -219,351 +196,391 @@ def extract_weather_forecast(service_result, entity_id):
 
 def find_swim_opportunities(
     forecast,
-    now,
+    today,
     score_min=55.0,
     min_air_c=21.0,
-    swim_time="16:00:00",
 ):
-    """Return credible bathing opportunities using distance weighting."""
+    """Return credible bathing days; no synthetic bathing time is invented."""
+    if isinstance(today, datetime.datetime):
+        today = today.date()
     score_min = float(score_min)
     min_air_c = float(min_air_c)
-    opportunities = []
-
+    result = []
     for index, day in enumerate(forecast or []):
-        date_value = day.get("date")
-        if date_value is None:
-            date_value = now.date() + datetime.timedelta(days=index)
-        swim_datetime = _combine(
-            date_value,
-            swim_time,
-            now.tzinfo,
-            default="16:00:00",
-        )
+        date_value = day.get("date") or (today + datetime.timedelta(days=index))
+        if date_value < today:
+            continue
         temperature = _number(day.get("temperature"))
-        raw_score = _number(day.get("score")) or 0.0
-        profile = forecast_horizon_profile(index)
+        score = _number(day.get("score")) or 0.0
         strategic_score = _number(day.get("strategic_score"))
         if strategic_score is None:
-            strategic_score = raw_score * profile["weight"]
-        confidence = day.get("confidence") or profile["confidence"]
-        horizon_weight = _number(day.get("horizon_weight"))
-        if horizon_weight is None:
-            horizon_weight = profile["weight"]
-
-        if swim_datetime <= now:
-            continue
+            strategic_score = score * forecast_horizon_profile(index)["weight"]
         if (
             temperature is None
             or temperature < min_air_c
             or strategic_score < score_min
         ):
             continue
-
-        bad_streak = 0
-        for relative, following in enumerate(
-            (forecast or [])[index + 1 : index + 4], start=1
-        ):
-            following_index = index + relative
-            f_temp = _number(following.get("temperature"))
-            f_raw_score = _number(following.get("score")) or 0.0
-            f_profile = forecast_horizon_profile(following_index)
-            f_strategic_score = _number(following.get("strategic_score"))
-            if f_strategic_score is None:
-                f_strategic_score = f_raw_score * f_profile["weight"]
-            if (
-                f_temp is not None
-                and f_temp >= min_air_c
-                and f_strategic_score >= score_min
-            ):
-                break
-            bad_streak += 1
-
-        opportunities.append(
+        result.append(
             {
                 "index": index,
                 "date": date_value,
-                "swim_datetime": swim_datetime,
                 "temperature": temperature,
-                "score": raw_score,
-                "strategic_score": round(float(strategic_score), 1),
-                "horizon_weight": round(float(horizon_weight), 2),
-                "confidence": confidence,
+                "templow": _number(day.get("templow")),
+                "score": score,
+                "strategic_score": round(strategic_score, 1),
+                "confidence": day.get("confidence")
+                or forecast_horizon_profile(index)["confidence"],
                 "condition": day.get("condition"),
-                "bad_streak_after": bad_streak,
-                "last_chance": bad_streak >= 2,
             }
         )
-
-    return opportunities
+    return result
 
 
 def ambient_bin(temperature):
-    """Return a stable learning bucket for PAC heating performance."""
     value = _number(temperature)
     if value is None:
         return "unknown"
-    if value < 10.0:
+    if value < 10:
         return "lt10"
-    if value < 15.0:
+    if value < 15:
         return "10_15"
-    if value < 20.0:
+    if value < 20:
         return "15_20"
-    if value < 25.0:
+    if value < 25:
         return "20_25"
     return "ge25"
 
 
-def update_heating_rate_model(model, ambient_c, sample_rate_c_per_h, alpha=0.25):
-    """Update one EWMA heating-rate bucket and return a copied model."""
+def normalize_preset_name(value):
+    text = str(value or "smart").strip().casefold()
+    return text or "smart"
+
+
+def update_heating_rate_model(
+    model,
+    preset,
+    ambient_c,
+    sample_rate_c_per_h,
+    alpha=0.25,
+):
+    """EWMA learning of real pool heating rate by PAC preset and air bin."""
     rate = _number(sample_rate_c_per_h)
-    if rate is None or not (0.05 <= rate <= 1.20):
+    if rate is None or not (0.03 <= rate <= 1.50):
         return dict(model or {})
 
     alpha = _clamp(float(alpha), 0.05, 1.0)
-    key = ambient_bin(ambient_c)
-    result = dict(model or {})
-    current = dict(result.get(key) or {})
+    key = normalize_preset_name(preset)
+    bucket = ambient_bin(ambient_c)
+
+    result = {
+        str(p): {str(b): dict(v) for b, v in (bins or {}).items()}
+        for p, bins in (model or {}).items()
+    }
+    bins = result.setdefault(key, {})
+    current = dict(bins.get(bucket) or {})
     previous = _number(current.get("rate"))
     count = int(current.get("count") or 0)
     learned = rate if previous is None else previous + alpha * (rate - previous)
-    result[key] = {
-        "rate": round(learned, 4),
-        "count": count + 1,
-    }
+    bins[bucket] = {"rate": round(learned, 4), "count": count + 1}
     return result
 
 
-def estimate_heating_rate(base_rate_c_per_h, ambient_c=None, learned_model=None):
-    """Estimate PAC water-heating rate from weather and optional learned data."""
+def estimate_heating_rate(
+    base_rate_c_per_h,
+    preset,
+    ambient_c=None,
+    learned_model=None,
+):
+    """Estimate net water gain °C/h, preferring learned data for this PAC mode."""
     base = max(0.05, float(base_rate_c_per_h))
     ambient = _number(ambient_c)
+    preset_key = normalize_preset_name(preset)
 
     if ambient is None:
         weather_adjusted = base
     else:
-        factor = _clamp(1.0 + 0.018 * (ambient - 20.0), 0.65, 1.25)
+        factor = _clamp(1.0 + 0.018 * (ambient - 20.0), 0.60, 1.30)
         weather_adjusted = base * factor
 
-    key = ambient_bin(ambient)
-    learned = (learned_model or {}).get(key)
+    weather_adjusted *= _PRESET_FALLBACK_FACTOR.get(preset_key, 1.0)
+
+    learned = ((learned_model or {}).get(preset_key) or {}).get(ambient_bin(ambient))
     learned_rate = _number((learned or {}).get("rate"))
     learned_count = int((learned or {}).get("count") or 0)
     if learned_rate is not None and learned_count > 0:
-        weight = min(0.80, 0.35 + 0.10 * learned_count)
+        weight = min(0.85, 0.35 + 0.10 * learned_count)
         return round(
             weight * learned_rate + (1.0 - weight) * weather_adjusted,
             4,
         )
-
     return round(weather_adjusted, 4)
 
 
-def _window(day, start_value, end_value, tzinfo, end_default="20:00:00"):
-    start = _combine(day, start_value, tzinfo, default="12:00:00")
-    end = _combine(day, end_value, tzinfo, default=end_default)
-    if end <= start:
-        end += datetime.timedelta(days=1)
-    return start, end
+def thermal_delta_bin(water_c, ambient_c):
+    water = _number(water_c)
+    ambient = _number(ambient_c)
+    if water is None or ambient is None:
+        return "unknown"
+    delta = max(0.0, water - ambient)
+    if delta < 5:
+        return "0_5"
+    if delta < 10:
+        return "5_10"
+    if delta < 15:
+        return "10_15"
+    if delta < 20:
+        return "15_20"
+    return "ge20"
 
 
-def _clip_window(start, end, now, deadline):
-    start = max(start, now)
-    end = min(end, deadline)
-    if end <= start:
-        return None
-    return start, end
+def normalize_cover_state(value):
+    text = str(value or "").strip().casefold()
+    if text in {"closed", "closing", "fermé", "fermee", "fermé(e)", "off"}:
+        return "closed"
+    if text in {"open", "opening", "ouvert", "ouverte", "on"}:
+        return "open"
+    return "unknown"
 
 
-def _allocate_latest(hours, start, end, kind):
-    hours = max(0.0, float(hours))
-    capacity = max(0.0, (end - start).total_seconds() / 3600.0)
-    used = min(hours, capacity)
-    if used <= 0.0:
-        return None, hours
-    segment = {
-        "start": end - datetime.timedelta(hours=used),
-        "end": end,
-        "hours": round(used, 3),
-        "kind": kind,
-    }
-    return segment, max(0.0, hours - used)
-
-
-def build_heating_schedule(
-    *,
-    now,
-    ready_datetime,
-    swim_datetime,
-    required_hours,
-    previous_day_start="12:00:00",
-    previous_day_end="20:00:00",
-    morning_start="07:00:00",
-    forecast=None,
+def update_loss_model(
+    model,
+    cover_state,
+    water_c,
+    ambient_c,
+    sample_loss_c_per_h,
+    alpha=0.25,
 ):
-    """Allocate heating with the previous day as the normal first choice.
+    """EWMA learning of passive night loss °C/h by cover + water/air delta."""
+    rate = _number(sample_loss_c_per_h)
+    if rate is None or not (0.0 <= rate <= 0.40):
+        return dict(model or {})
 
-    The previous afternoon/evening is used first even for a small heat demand.
-    The target-day morning is a top-up window. Earlier days are used only when
-    the required hours do not fit in those two windows. If the plan is already
-    late, an emergency segment starts immediately so comfort is recovered rather
-    than silently missing the bathing window.
-    """
-    required = max(0.0, float(required_hours))
-    if required <= 0.0:
-        return []
+    alpha = _clamp(float(alpha), 0.05, 1.0)
+    cover = normalize_cover_state(cover_state)
+    bucket = thermal_delta_bin(water_c, ambient_c)
+    result = {
+        str(c): {str(b): dict(v) for b, v in (bins or {}).items()}
+        for c, bins in (model or {}).items()
+    }
+    bins = result.setdefault(cover, {})
+    current = dict(bins.get(bucket) or {})
+    previous = _number(current.get("rate"))
+    count = int(current.get("count") or 0)
+    learned = rate if previous is None else previous + alpha * (rate - previous)
+    bins[bucket] = {"rate": round(learned, 4), "count": count + 1}
+    return result
 
-    tzinfo = ready_datetime.tzinfo
-    deadline = ready_datetime if now < ready_datetime else swim_datetime
-    if deadline <= now:
-        return []
 
-    target_day = ready_datetime.date()
-    previous_day = target_day - datetime.timedelta(days=1)
-    segments = []
-    remaining = required
+def estimate_loss_rate(
+    water_c,
+    ambient_c,
+    cover_state=None,
+    learned_model=None,
+    fallback_delta10_c_per_h=0.05,
+):
+    """Estimate passive pool cooling °C/h."""
+    water = _number(water_c)
+    ambient = _number(ambient_c)
+    if water is None or ambient is None:
+        return 0.0
 
-    # Weather-aware preload: the day before remains the primary preparation day,
-    # but if it is markedly cold/cloudy/rainy and a recent earlier day is much
-    # warmer/sunnier, shift at most 25% (max 2 h) to that better window. The
-    # majority still runs the day before, preserving comfort and limiting losses.
-    forecast_by_date = {
+    cover = normalize_cover_state(cover_state)
+    bucket = thermal_delta_bin(water, ambient)
+    learned = ((learned_model or {}).get(cover) or {}).get(bucket)
+    learned_rate = _number((learned or {}).get("rate"))
+    learned_count = int((learned or {}).get("count") or 0)
+
+    delta = max(0.0, water - ambient)
+    fallback = max(0.0, float(fallback_delta10_c_per_h)) * delta / 10.0
+    if cover == "open":
+        fallback *= 1.8
+    elif cover == "unknown":
+        fallback *= 1.25
+    fallback = _clamp(fallback, 0.0, 0.30)
+
+    if learned_rate is not None and learned_count > 0:
+        weight = min(0.85, 0.35 + 0.10 * learned_count)
+        return round(weight * learned_rate + (1.0 - weight) * fallback, 4)
+    return round(fallback, 4)
+
+
+def _forecast_by_date(forecast):
+    return {
         item.get("date"): item
         for item in (forecast or [])
         if isinstance(item, dict) and item.get("date") is not None
     }
-    previous_quality = float(
-        (forecast_by_date.get(previous_day) or {}).get("heating_quality") or 50.0
-    )
-    if required >= 4.0 and previous_day > now.date():
-        candidates = []
-        day_cursor = previous_day - datetime.timedelta(days=1)
-        for age in range(1, 4):
-            if day_cursor < now.date():
-                break
-            quality = float(
-                (forecast_by_date.get(day_cursor) or {}).get("heating_quality") or 0.0
+
+
+def _day_temperature(item):
+    return _number((item or {}).get("temperature"))
+
+
+def _night_temperature(item):
+    low = _number((item or {}).get("templow"))
+    if low is not None:
+        return low
+    high = _day_temperature(item)
+    return None if high is None else high - 5.0
+
+
+def _candidate_requirements(
+    *,
+    candidate,
+    today,
+    water_c,
+    target_c,
+    forecast,
+    loss_model,
+    cover_state,
+    night_hours,
+    loss_fallback_delta10,
+):
+    """Return target recovery including predicted passive night losses."""
+    by_date = _forecast_by_date(forecast)
+    total_loss = 0.0
+    projected = float(water_c)
+    floor_track = []
+    cursor = today
+
+    while cursor < candidate["date"]:
+        entry = by_date.get(cursor) or {}
+        ambient = _night_temperature(entry)
+        loss_rate = estimate_loss_rate(
+            projected,
+            ambient,
+            cover_state=cover_state,
+            learned_model=loss_model,
+            fallback_delta10_c_per_h=loss_fallback_delta10,
+        )
+        loss = loss_rate * max(0.0, float(night_hours))
+        total_loss += loss
+        projected -= loss
+        floor_track.append((cursor, projected, loss))
+        cursor += datetime.timedelta(days=1)
+
+    required_gain = max(0.0, float(target_c) - float(water_c)) + total_loss
+    return {
+        "required_gain_c": required_gain,
+        "predicted_loss_c": total_loss,
+        "projected_without_heat_c": projected,
+        "floor_track": floor_track,
+    }
+
+
+def _capacity_by_day(
+    *,
+    today,
+    candidate_date,
+    forecast,
+    preset,
+    base_rate,
+    heating_model,
+    day_hours,
+    today_day_hours_remaining,
+    include_night=False,
+    night_hours=12.0,
+):
+    by_date = _forecast_by_date(forecast)
+    result = []
+    cursor = today
+    while cursor < candidate_date:
+        entry = by_date.get(cursor) or {}
+        day_air = _day_temperature(entry)
+        usable_day_hours = (
+            max(0.0, float(today_day_hours_remaining))
+            if cursor == today
+            else max(0.0, float(day_hours))
+        )
+        day_rate = estimate_heating_rate(
+            base_rate,
+            preset,
+            day_air,
+            learned_model=heating_model,
+        )
+        capacity = day_rate * usable_day_hours
+        night_capacity = 0.0
+        if include_night:
+            night_air = _night_temperature(entry)
+            night_rate = estimate_heating_rate(
+                base_rate,
+                preset,
+                night_air,
+                learned_model=heating_model,
             )
-            # Penalize older heat storage so weather must be clearly better.
-            effective_quality = quality - (age - 1) * 8.0
-            candidates.append((effective_quality, quality, day_cursor))
-            day_cursor -= datetime.timedelta(days=1)
-        if candidates:
-            _, best_quality, best_day = max(candidates, key=lambda item: item[0])
-            if best_quality >= previous_quality + 25.0:
-                smart_hours = min(2.0, required * 0.25)
-                smart_start, smart_end = _window(
-                    best_day,
-                    previous_day_start,
-                    previous_day_end,
-                    tzinfo,
-                )
-                clipped_smart = _clip_window(
-                    smart_start,
-                    smart_end,
-                    now,
-                    deadline,
-                )
-                if clipped_smart is not None:
-                    segment, remaining = _allocate_latest(
-                        smart_hours,
-                        clipped_smart[0],
-                        clipped_smart[1],
-                        "weather_preheat",
-                    )
-                    if segment:
-                        segments.append(segment)
-                        # _allocate_latest only returns the unallocated fraction
-                        # of smart_hours, so deduct the amount actually used from
-                        # the global remaining heat requirement.
-                        remaining = required - float(segment["hours"])
+            night_capacity = night_rate * max(0.0, float(night_hours))
+            capacity += night_capacity
+        result.append(
+            {
+                "date": cursor,
+                "capacity_c": capacity,
+                "day_capacity_c": day_rate * usable_day_hours,
+                "night_capacity_c": night_capacity,
+            }
+        )
+        cursor += datetime.timedelta(days=1)
+    return result
 
-    prev_start, prev_end = _window(
-        previous_day,
-        previous_day_start,
-        previous_day_end,
-        tzinfo,
+
+def _latest_start_date(capacities, required_gain_c):
+    required = max(0.0, float(required_gain_c))
+    if required <= 0.0:
+        return capacities[-1]["date"] if capacities else None
+
+    cumulative = 0.0
+    for item in reversed(capacities):
+        cumulative += max(0.0, float(item.get("capacity_c") or 0.0))
+        if cumulative >= required:
+            return item["date"]
+    return None
+
+
+def _choose_recovery_strategy(
+    *,
+    today,
+    candidate_date,
+    required_gain_c,
+    forecast,
+    base_rate,
+    heating_model,
+    smart_preset,
+    turbo_preset,
+    day_hours,
+    today_day_hours_remaining,
+    night_hours,
+):
+    """Prefer Smart/day, then Turbo/day, then night heating as a last resort."""
+    attempts = (
+        (smart_preset, False),
+        (turbo_preset, False),
+        (smart_preset, True),
+        (turbo_preset, True),
     )
-    clipped = _clip_window(prev_start, prev_end, now, deadline)
-    if clipped is not None:
-        segment, remaining = _allocate_latest(
-            remaining, clipped[0], clipped[1], "previous_day"
+    for preset, include_night in attempts:
+        capacities = _capacity_by_day(
+            today=today,
+            candidate_date=candidate_date,
+            forecast=forecast,
+            preset=preset,
+            base_rate=base_rate,
+            heating_model=heating_model,
+            day_hours=day_hours,
+            today_day_hours_remaining=today_day_hours_remaining,
+            include_night=include_night,
+            night_hours=night_hours,
         )
-        if segment:
-            segments.append(segment)
-
-    morning_begin = _combine(
-        target_day,
-        morning_start,
-        tzinfo,
-        default="07:00:00",
-    )
-    morning_end = min(ready_datetime, deadline)
-    clipped = _clip_window(morning_begin, morning_end, now, deadline)
-    if remaining > 0.0 and clipped is not None:
-        segment, remaining = _allocate_latest(
-            remaining, clipped[0], clipped[1], "morning_topup"
-        )
-        if segment:
-            segments.append(segment)
-
-    day = previous_day - datetime.timedelta(days=1)
-    for _ in range(9):
-        if remaining <= 0.0 or day < now.date():
-            break
-        early_start, early_end = _window(
-            day,
-            previous_day_start,
-            previous_day_end,
-            tzinfo,
-        )
-        # Do not overlap a weather-aware preload already reserved on the
-        # same earlier day. Fill the free part immediately before that preload.
-        same_day_starts = [
-            item["start"]
-            for item in segments
-            if item["start"].date() == day
-        ]
-        if same_day_starts:
-            early_end = min(early_end, min(same_day_starts))
-
-        clipped = _clip_window(early_start, early_end, now, deadline)
-        if clipped is not None:
-            segment, remaining = _allocate_latest(
-                remaining, clipped[0], clipped[1], "early_preheat"
-            )
-            if segment:
-                segments.append(segment)
-        day -= datetime.timedelta(days=1)
-
-    if remaining > 0.0:
-        future_starts = sorted(s["start"] for s in segments if s["start"] > now)
-        emergency_end = future_starts[0] if future_starts else deadline
-        emergency_capacity = max(
-            0.0,
-            (emergency_end - now).total_seconds() / 3600.0,
-        )
-        emergency_used = min(remaining, emergency_capacity)
-        if emergency_used > 0.0:
-            segments.append(
-                {
-                    "start": now,
-                    "end": now + datetime.timedelta(hours=emergency_used),
-                    "hours": round(emergency_used, 3),
-                    "kind": "emergency",
-                }
-            )
-
-    segments.sort(key=lambda item: item["start"])
-    return segments
-
-
-def _inside_window(now, start="12:00:00", end="20:00:00"):
-    start_time = _parse_time(start, "12:00:00")
-    end_time = _parse_time(end, "20:00:00")
-    current = now.timetz().replace(tzinfo=None)
-    if start_time <= end_time:
-        return start_time <= current < end_time
-    return current >= start_time or current < end_time
+        start_date = _latest_start_date(capacities, required_gain_c)
+        if start_date is not None:
+            total_capacity = sum(x["capacity_c"] for x in capacities)
+            return {
+                "preset": preset,
+                "allow_night": include_night,
+                "start_date": start_date,
+                "capacity_c": round(total_capacity, 2),
+                "capacities": capacities,
+            }
+    return None
 
 
 def build_predictive_plan(
@@ -572,243 +589,288 @@ def build_predictive_plan(
     water_c,
     target_c,
     forecast,
-    heating_rate_c_per_h,
-    floor_delta_c,
+    base_heating_rate_c_per_h,
+    heating_rate_model=None,
+    loss_model=None,
+    cover_state=None,
+    floor_delta_c=2.0,
+    minimum_water_c=None,
+    floor_recharge_c=0.5,
+    stop_margin_c=0.2,
     score_min=55.0,
     min_air_c=21.0,
-    swim_time="16:00:00",
-    ready_time="11:00:00",
-    maintenance_band_c=0.5,
-    stop_margin_c=0.2,
-    safety_margin_h=0.5,
-    last_chance_margin_h=1.0,
-    previous_day_start="12:00:00",
-    previous_day_end="20:00:00",
-    morning_start="07:00:00",
-    operational_horizon_days=3,
+    smart_preset="Smart",
+    turbo_preset="Turbo",
+    day_hours=12.0,
+    today_day_hours_remaining=12.0,
+    night_hours=12.0,
+    loss_fallback_delta10_c_per_h=0.05,
+    daylight_active=True,
 ):
-    """Build one season-wide predictive heating decision."""
-    water_c = float(water_c)
-    target_c = float(target_c)
-    heating_rate = max(0.05, float(heating_rate_c_per_h))
-    floor_c = target_c - max(0.0, float(floor_delta_c))
-    maintenance_target = min(
-        target_c,
-        floor_c + max(0.1, float(maintenance_band_c)),
-    )
-    stop_margin_c = max(0.0, float(stop_margin_c))
-    operational_horizon_days = max(1, min(10, int(operational_horizon_days)))
+    """Build one predictive decision from weather + learned thermal behavior."""
+    today = now.date() if isinstance(now, datetime.datetime) else now
+    water = float(water_c)
+    target = float(target_c)
+    stop_margin = max(0.0, float(stop_margin_c))
+    if minimum_water_c is None:
+        floor_c = target - max(0.0, float(floor_delta_c))
+    else:
+        floor_c = float(minimum_water_c)
+    floor_c = min(target, floor_c)
+    floor_target = min(target, floor_c + max(0.1, float(floor_recharge_c)))
 
     opportunities = find_swim_opportunities(
         forecast,
-        now,
+        today,
         score_min=score_min,
         min_air_c=min_air_c,
-        swim_time=swim_time,
     )
-    candidate = opportunities[0] if opportunities else None
 
     base = {
         "should_heat": False,
         "heat_target_c": None,
+        "preset": smart_preset,
+        "allow_night": False,
         "floor_c": round(floor_c, 2),
-        "maintenance_target_c": round(maintenance_target, 2),
-        "candidate": candidate,
+        "floor_target_c": round(floor_target, 2),
+        "candidate": None,
         "opportunities": opportunities,
-        "required_hours": 0.0,
-        "scheduled_hours": 0.0,
-        "schedule": [],
-        "active_segment": None,
-        "next_segment": None,
-        "ready_datetime": None,
-        "operational_horizon_days": operational_horizon_days,
+        "recovery_start_date": None,
+        "required_gain_c": 0.0,
+        "predicted_loss_c": 0.0,
+        "projected_without_heat_c": round(water, 2),
+        "estimated_capacity_c": 0.0,
         "reason": "",
     }
 
-    if candidate is None:
-        if water_c >= maintenance_target - stop_margin_c:
-            base["reason"] = (
-                f"aucune baignade probable, réserve {floor_c:.1f} °C"
-            )
-            return base
+    by_date = _forecast_by_date(forecast)
+    today_entry = by_date.get(today) or {}
+    next_night_air = _night_temperature(today_entry)
+    next_night_loss = estimate_loss_rate(
+        water,
+        next_night_air,
+        cover_state=cover_state,
+        learned_model=loss_model,
+        fallback_delta10_c_per_h=loss_fallback_delta10_c_per_h,
+    ) * max(0.0, float(night_hours))
+    projected_next_morning = water - next_night_loss
 
-        if water_c < floor_c and _inside_window(
-            now,
-            previous_day_start,
-            previous_day_end,
-        ):
+    selected = None
+    for candidate in opportunities:
+        if candidate["date"] == today:
+            deficit = max(0.0, target - water)
+            day_air = _day_temperature(by_date.get(today) or {})
+            smart_rate = estimate_heating_rate(
+                base_heating_rate_c_per_h,
+                smart_preset,
+                day_air,
+                learned_model=heating_rate_model,
+            )
+            turbo_rate = estimate_heating_rate(
+                base_heating_rate_c_per_h,
+                turbo_preset,
+                day_air,
+                learned_model=heating_rate_model,
+            )
+            remaining_hours = max(0.0, float(today_day_hours_remaining))
+            if deficit <= smart_rate * remaining_hours:
+                selected = (
+                    candidate,
+                    {
+                        "preset": smart_preset,
+                        "allow_night": False,
+                        "start_date": today,
+                        "capacity_c": smart_rate * remaining_hours,
+                    },
+                    {
+                        "required_gain_c": deficit,
+                        "predicted_loss_c": 0.0,
+                        "projected_without_heat_c": water,
+                        "floor_track": [],
+                    },
+                )
+                break
+            if deficit <= turbo_rate * remaining_hours:
+                selected = (
+                    candidate,
+                    {
+                        "preset": turbo_preset,
+                        "allow_night": False,
+                        "start_date": today,
+                        "capacity_c": turbo_rate * remaining_hours,
+                    },
+                    {
+                        "required_gain_c": deficit,
+                        "predicted_loss_c": 0.0,
+                        "projected_without_heat_c": water,
+                        "floor_track": [],
+                    },
+                )
+                break
+            continue
+
+        requirements = _candidate_requirements(
+            candidate=candidate,
+            today=today,
+            water_c=water,
+            target_c=target,
+            forecast=forecast,
+            loss_model=loss_model,
+            cover_state=cover_state,
+            night_hours=night_hours,
+            loss_fallback_delta10=loss_fallback_delta10_c_per_h,
+        )
+        strategy = _choose_recovery_strategy(
+            today=today,
+            candidate_date=candidate["date"],
+            required_gain_c=requirements["required_gain_c"],
+            forecast=forecast,
+            base_rate=base_heating_rate_c_per_h,
+            heating_model=heating_rate_model,
+            smart_preset=smart_preset,
+            turbo_preset=turbo_preset,
+            day_hours=day_hours,
+            today_day_hours_remaining=today_day_hours_remaining,
+            night_hours=night_hours,
+        )
+        if strategy is not None:
+            selected = (candidate, strategy, requirements)
+            break
+
+    if selected is None:
+        if water <= floor_c - stop_margin:
             base.update(
                 should_heat=True,
-                heat_target_c=round(maintenance_target, 2),
+                heat_target_c=round(floor_target, 2),
+                allow_night=not bool(daylight_active),
+                reason=f"protection plancher {floor_c:.1f} °C",
+            )
+            return base
+        if projected_next_morning < floor_c and daylight_active:
+            base.update(
+                should_heat=True,
+                heat_target_c=round(
+                    min(
+                        target,
+                        floor_target + max(0.0, floor_c - projected_next_morning),
+                    ),
+                    2,
+                ),
                 reason=(
-                    f"mauvais temps prolongé, recharge réserve vers "
-                    f"{maintenance_target:.1f} °C"
+                    f"préservation plancher avant nuit "
+                    f"(prévision {projected_next_morning:.1f} °C)"
                 ),
             )
             return base
-
         base["reason"] = (
-            f"aucune baignade probable, attente (réserve {floor_c:.1f} °C)"
+            f"aucune baignade thermiquement pertinente; PAC arrêtée "
+            f"(plancher {floor_c:.1f} °C)"
         )
         return base
 
-    ready_datetime = _combine(
-        candidate["date"],
-        ready_time,
-        now.tzinfo,
-        default="11:00:00",
-    )
-    candidate["ready_datetime"] = ready_datetime
-    base["ready_datetime"] = ready_datetime
+    candidate, strategy, requirements = selected
+    start_date = strategy["start_date"]
 
-    candidate_index = int(candidate.get("index") or 0)
-    if candidate_index > operational_horizon_days:
-        confidence = (
-            candidate.get("confidence")
-            or forecast_horizon_profile(candidate_index)["confidence"]
+    floor_start = None
+    for day, projected, _loss in requirements.get("floor_track") or []:
+        if projected < floor_c:
+            floor_start = day
+            break
+    if floor_start is not None and (start_date is None or floor_start < start_date):
+        start_date = floor_start
+
+    base.update(
+        candidate=candidate,
+        recovery_start_date=start_date,
+        preset=strategy["preset"],
+        allow_night=bool(strategy["allow_night"]),
+        required_gain_c=round(requirements["required_gain_c"], 2),
+        predicted_loss_c=round(requirements["predicted_loss_c"], 2),
+        projected_without_heat_c=round(
+            requirements["projected_without_heat_c"], 2
+        ),
+        estimated_capacity_c=round(strategy.get("capacity_c") or 0.0, 2),
+    )
+
+    if water >= target - stop_margin:
+        base["reason"] = (
+            f"eau prête pour {candidate['date'].isoformat()} "
+            f"(score {candidate['strategic_score']:.0f})"
         )
-        if water_c < floor_c and _inside_window(
-            now,
-            previous_day_start,
-            previous_day_end,
-        ):
+        return base
+
+    if today < start_date:
+        if projected_next_morning < floor_c and daylight_active:
             base.update(
                 should_heat=True,
-                heat_target_c=round(maintenance_target, 2),
+                heat_target_c=round(floor_target, 2),
+                preset=smart_preset,
                 reason=(
-                    f"tendance {confidence} J+{candidate_index}; "
-                    f"recharge réserve vers {maintenance_target:.1f} °C"
+                    f"préservation plancher avant préparation "
+                    f"{candidate['date'].isoformat()}"
+                ),
+            )
+            return base
+        base["reason"] = (
+            f"attente; préparation {candidate['date'].isoformat()} "
+            f"à partir du {start_date.isoformat()}"
+        )
+        return base
+
+    if candidate["date"] == today:
+        if daylight_active or strategy["allow_night"]:
+            base.update(
+                should_heat=True,
+                heat_target_c=round(target, 2),
+                reason=(
+                    f"journée baignade {candidate['strategic_score']:.0f}/100; "
+                    f"chauffe/maintien {strategy['preset']}"
                 ),
             )
         else:
-            base["reason"] = (
-                f"tendance {confidence} J+{candidate_index}; observation 15 j, "
-                f"planification opérationnelle à J+{operational_horizon_days}"
-            )
+            base["reason"] = "journée baignade; attente du jour"
         return base
 
-    deficit = max(0.0, target_c - water_c)
-    required_hours = deficit / heating_rate
-    margin = (
-        float(last_chance_margin_h)
-        if candidate["last_chance"]
-        else float(safety_margin_h)
-    )
-    total_hours = required_hours + max(0.0, margin)
-
-    schedule = build_heating_schedule(
-        now=now,
-        ready_datetime=ready_datetime,
-        swim_datetime=candidate["swim_datetime"],
-        required_hours=total_hours,
-        previous_day_start=previous_day_start,
-        previous_day_end=previous_day_end,
-        morning_start=morning_start,
-        forecast=forecast,
-    )
-    base["required_hours"] = round(required_hours, 2)
-    base["scheduled_hours"] = round(
-        sum(float(item.get("hours") or 0.0) for item in schedule),
-        2,
-    )
-    base["schedule"] = schedule
-
-    active = None
-    next_segment = None
-    for item in schedule:
-        if item["start"] <= now < item["end"]:
-            active = item
-            break
-        if item["start"] > now and next_segment is None:
-            next_segment = item
-    base["active_segment"] = active
-    base["next_segment"] = next_segment
-
-    if water_c >= target_c - stop_margin_c:
-        base["reason"] = (
-            f"eau prête pour J+{candidate['index']} "
-            f"(score {candidate['score']:.0f})"
-        )
-        return base
-
-    if (
-        water_c < floor_c
-        and active is None
-        and next_segment is not None
-        and _inside_window(now, previous_day_start, previous_day_end)
-    ):
+    if daylight_active or strategy["allow_night"]:
         base.update(
             should_heat=True,
-            heat_target_c=round(maintenance_target, 2),
+            heat_target_c=round(target, 2),
             reason=(
-                f"préservation avant J+{candidate['index']}, réserve vers "
-                f"{maintenance_target:.1f} °C"
+                f"préparation {candidate['date'].isoformat()} depuis "
+                f"{start_date.isoformat()} • {strategy['preset']}"
+                + (" • nuit autorisée" if strategy["allow_night"] else "")
             ),
         )
-        return base
-
-    if active is not None:
-        label = "urgence" if active.get("kind") == "emergency" else "planning"
-        chance = " dernière occasion probable" if candidate["last_chance"] else ""
-        base.update(
-            should_heat=True,
-            heat_target_c=round(target_c, 2),
-            reason=(
-                f"{label} J+{candidate['index']} score {candidate['score']:.0f};"
-                f"{chance} besoin ~{required_hours:.1f} h"
-            ).strip(),
-        )
-        return base
-
-    if next_segment is not None:
+    else:
         base["reason"] = (
-            f"baignade J+{candidate['index']} score {candidate['score']:.0f}; "
-            f"chauffe {next_segment['start'].strftime('%a %H:%M')}"
+            f"préparation {candidate['date'].isoformat()} en journée; "
+            "PAC arrêtée cette nuit"
         )
-        return base
-
-    if now < candidate["swim_datetime"]:
-        base.update(
-            should_heat=True,
-            heat_target_c=round(target_c, 2),
-            reason=(
-                f"rattrapage immédiat J+{candidate['index']} "
-                f"score {candidate['score']:.0f}"
-            ),
-        )
-        return base
-
-    base["reason"] = "aucun créneau de chauffe utile"
     return base
 
 
-def dashboard_forecast(forecast, plan, now):
-    """Return compact JSON-serializable rows for a Mushroom/dashboard card."""
+def dashboard_forecast(forecast, plan, today):
+    """Return compact JSON-serializable rows for a Home Assistant dashboard."""
+    if isinstance(today, datetime.datetime):
+        today = today.date()
     candidate = (plan or {}).get("candidate") or {}
     selected_date = candidate.get("date")
-    schedule = (plan or {}).get("schedule") or []
+    start_date = (plan or {}).get("recovery_start_date")
     rows = []
-
     for index, day in enumerate(forecast or []):
-        day_date = day.get("date")
-        if day_date is None:
-            day_date = now.date() + datetime.timedelta(days=index)
-        slots = []
-        for item in schedule:
-            if item["start"].date() == day_date:
-                slots.append(
-                    {
-                        "start": item["start"].strftime("%H:%M"),
-                        "end": item["end"].strftime("%H:%M"),
-                        "kind": item.get("kind"),
-                    }
-                )
+        day_date = day.get("date") or (today + datetime.timedelta(days=index))
+        preheat = bool(
+            start_date is not None
+            and selected_date is not None
+            and start_date <= day_date < selected_date
+        )
         rows.append(
             {
                 "offset": index,
                 "label": "J0" if index == 0 else f"J+{index}",
                 "date": day_date.isoformat(),
                 "temperature": _number(day.get("temperature")),
+                "templow": _number(day.get("templow")),
                 "condition": day.get("condition"),
                 "precipitation_probability": _number(
                     day.get("precipitation_probability")
@@ -816,13 +878,15 @@ def dashboard_forecast(forecast, plan, now):
                 "wind_speed": _number(day.get("wind_speed")),
                 "score": _number(day.get("score")) or 0.0,
                 "strategic_score": _number(day.get("strategic_score")) or 0.0,
-                "horizon_weight": _number(day.get("horizon_weight")) or 1.0,
-                "confidence": day.get("confidence") or forecast_horizon_profile(index)["confidence"],
-                "operational": index <= int((plan or {}).get("operational_horizon_days") or 3),
-                "heating_quality": _number(day.get("heating_quality")) or 0.0,
+                "confidence": day.get("confidence")
+                or forecast_horizon_profile(index)["confidence"],
                 "swim": day_date == selected_date,
-                "heating": bool(slots),
-                "heating_slots": slots,
+                "preheat": preheat,
+                "heating": preheat or day_date == selected_date,
+                "preset": (plan or {}).get("preset") if preheat else None,
+                "night_allowed": (
+                    bool((plan or {}).get("allow_night")) if preheat else False
+                ),
             }
         )
     return rows

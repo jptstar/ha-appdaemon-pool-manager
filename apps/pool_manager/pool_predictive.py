@@ -991,8 +991,9 @@ def build_predictive_plan(
             floor_c=floor_c,
             stop_margin=stop_margin,
         )
-        # Today's opportunity is ignored if even day+night Turbo cannot recover.
-        if candidate["date"] == today and not candidate_plan["thermally_reachable"]:
+        # A weather-friendly day is useful only if the learned installation can
+        # physically recover the requested water temperature in time.
+        if not candidate_plan["thermally_reachable"]:
             continue
         selected = candidate_plan
         break

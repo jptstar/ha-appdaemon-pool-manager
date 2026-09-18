@@ -746,7 +746,7 @@ def build_predictive_plan(
                 reason=f"protection plancher {floor_c:.1f} °C",
             )
             return base
-        if projected_next_morning < floor_c and daylight_active:
+        if projected_next_morning < floor_c:
             base.update(
                 should_heat=True,
                 heat_target_c=round(
@@ -756,6 +756,7 @@ def build_predictive_plan(
                     ),
                     2,
                 ),
+                allow_night=not bool(daylight_active),
                 reason=(
                     f"préservation plancher avant nuit "
                     f"(prévision {projected_next_morning:.1f} °C)"
@@ -770,14 +771,6 @@ def build_predictive_plan(
 
     candidate, strategy, requirements = selected
     start_date = strategy["start_date"]
-
-    floor_start = None
-    for day, projected, _loss in requirements.get("floor_track") or []:
-        if projected < floor_c:
-            floor_start = day
-            break
-    if floor_start is not None and (start_date is None or floor_start < start_date):
-        start_date = floor_start
 
     base.update(
         candidate=candidate,
@@ -800,11 +793,12 @@ def build_predictive_plan(
         return base
 
     if today < start_date:
-        if projected_next_morning < floor_c and daylight_active:
+        if projected_next_morning < floor_c:
             base.update(
                 should_heat=True,
                 heat_target_c=round(floor_target, 2),
                 preset=smart_preset,
+                allow_night=not bool(daylight_active),
                 reason=(
                     f"préservation plancher avant préparation "
                     f"{candidate['date'].isoformat()}"

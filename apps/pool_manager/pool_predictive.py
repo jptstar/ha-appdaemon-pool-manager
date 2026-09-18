@@ -466,14 +466,6 @@ def estimate_heating_rate(
     return round(weather_adjusted, 4)
 
 
-def estimate_heating_power(preset, ambient_c=None, learned_model=None):
-    learned = (
-        ((learned_model or {}).get(normalize_preset_name(preset)) or {})
-        .get(ambient_bin(ambient_c))
-    )
-    return _number((learned or {}).get("power_w"))
-
-
 def thermal_delta_bin(water_c, ambient_c):
     water = _number(water_c)
     ambient = _number(ambient_c)
@@ -696,7 +688,7 @@ def _future_smart_capacity(
         )
         rows.append(item)
         total += item["capacity_c"]
-    return total, rows
+    return total
 
 
 def _recovery_start_date(
@@ -755,11 +747,10 @@ def _candidate_plan(
     candidate_day_hours,
     night_hours,
     loss_fallback_delta10,
-    daylight_active,
     floor_c,
     stop_margin,
 ):
-    loss_total, projected_no_heat, loss_rows = _predicted_loss_path(
+    loss_total, projected_no_heat, _loss_rows = _predicted_loss_path(
         water_c=water,
         start_date=today,
         end_date=candidate["date"],
@@ -771,7 +762,7 @@ def _candidate_plan(
     )
 
     required_gain = max(0.0, target - water) + loss_total
-    future_smart, future_rows = _future_smart_capacity(
+    future_smart = _future_smart_capacity(
         today=today,
         candidate_date=candidate["date"],
         forecast=forecast,
@@ -895,9 +886,7 @@ def _candidate_plan(
         "required_gain_c": required_gain,
         "predicted_loss_c": loss_total,
         "projected_without_heat_c": projected_no_heat,
-        "loss_path": loss_rows,
         "future_smart_capacity_c": future_smart,
-        "future_capacity": future_rows,
         "trajectory_target_c": trajectory_target,
         "gain_today_c": gain_today,
         "day_preset": day_preset,
@@ -908,7 +897,6 @@ def _candidate_plan(
         "today_turbo_capacity_c": today_turbo["capacity_c"],
         "thermally_reachable": thermally_reachable,
         "max_recovery_capacity_c": max_capacity,
-        "daylight_active": bool(daylight_active),
     }
 
 
@@ -997,7 +985,6 @@ def build_predictive_plan(
             candidate_day_hours=candidate_day_hours,
             night_hours=night_hours,
             loss_fallback_delta10=loss_fallback_delta10_c_per_h,
-            daylight_active=daylight_active,
             floor_c=floor_c,
             stop_margin=stop_margin,
         )

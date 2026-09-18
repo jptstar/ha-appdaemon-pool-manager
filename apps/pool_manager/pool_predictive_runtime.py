@@ -345,7 +345,6 @@ class PredictiveHeatingSupport:
 
         self._heating_learning_session = None
         self._passive_learning_session = None
-        self._last_certification_processed_at = None
         self._load_predictive_learning()
 
     # ----------------------------- forecast cache -----------------------------
@@ -628,17 +627,9 @@ class PredictiveHeatingSupport:
                 pass
         return True
 
-    def _measurement_is_decision_gate(self):
-        return self.chauffage_predictif_measurement_purpose in {
-            "decision",
-            "morning_decision",
-        }
-
     def _register_certified_measurement(self, now, water):
-        previous_at = self.chauffage_predictif_certified_at
         self.chauffage_predictif_certified_water_c = float(water)
         self.chauffage_predictif_certified_at = now
-        self._last_certification_processed_at = now
 
         self._finalize_passive_learning(now, float(water))
 
@@ -672,7 +663,7 @@ class PredictiveHeatingSupport:
         except Exception:
             pass
 
-        return previous_at
+        return True
 
     def _update_certified_measurement(self, now=None):
         now = now or datetime.datetime.now()

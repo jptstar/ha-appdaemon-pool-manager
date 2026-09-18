@@ -112,6 +112,35 @@ pool_manager:
   chauffage_predictif_apprentissage_min_s: 1800
   chauffage_predictif_apprentissage_alpha: 0.25
 
+  # Certified water measurement used by learning and important heat decisions.
+  # 47% remains the normal hydraulic low limit, but the thermal model only
+  # certifies the pool temperature after 15 minutes at 70%, followed by a short
+  # stability check. Lower-speed pipe readings never train the model.
+  chauffage_predictif_mesure_vitesse_pct: 70
+  chauffage_predictif_mesure_tempo_s: 900
+  chauffage_predictif_mesure_stabilite_s: 120
+  chauffage_predictif_mesure_variation_max_c: 0.15
+  chauffage_predictif_mesure_fraiche_s: 21600
+
+  # During a long PAC run, request another certified sample every 2 hours so
+  # Smart/Turbo gain and electrical power continue to learn automatically.
+  chauffage_predictif_mesure_intervalle_chauffe_s: 7200
+
+  # If normal filtration is already running, certify a morning decision when a
+  # selected bathing opportunity is within this many days. The controller does
+  # not start the pump merely to measure when the current decision is WAIT.
+  chauffage_predictif_mesure_anticipation_jours: 3
+
+  # Daily thermal capacity assumptions before enough installation data exists.
+  # The planner makes a daily WAIT/PRESERVE/PREHEAT/MAINTAIN decision; these are
+  # capacity envelopes, not fixed heating schedules.
+  chauffage_predictif_heures_chauffe_jour: 12
+  chauffage_predictif_heures_jour_baignade: 6
+
+  # The real cover entity is used for learning. For future overnight forecasts,
+  # assume the cover is normally closed even if it is currently open in daytime.
+  chauffage_predictif_volet_nuit_prevu: closed
+
   # Optional absolute recoverability floor. When set, the water will not be
   # deliberately allowed below this temperature, even through a long bad spell.
   # chauffage_predictif_temperature_min_eau_c: 22

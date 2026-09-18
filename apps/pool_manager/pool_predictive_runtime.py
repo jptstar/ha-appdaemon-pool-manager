@@ -306,6 +306,15 @@ class PredictiveHeatingSupport:
                 float(self.args.get("chauffage_predictif_heures_jour_baignade", 6.0)),
             ),
         )
+        # Future night-loss forecasts must not reuse the *current* daytime cover
+        # state. With a configured cover entity we assume the normal night policy
+        # is closed unless the installation explicitly overrides it.
+        self.chauffage_predictif_volet_nuit_prevu = normalize_cover_state(
+            self.args.get(
+                "chauffage_predictif_volet_nuit_prevu",
+                "closed" if self.args.get("entity_volet_piscine") else "unknown",
+            )
+        )
 
         default_learning_file = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -555,6 +564,13 @@ class PredictiveHeatingSupport:
             return normalize_cover_state(self.get_state(entity))
         except Exception:
             return "unknown"
+
+    def _predictive_expected_night_cover_state(self):
+        return getattr(
+            self,
+            "chauffage_predictif_volet_nuit_prevu",
+            "unknown",
+        )
 
     def _certified_age_s(self, now=None):
         if self.chauffage_predictif_certified_at is None:
@@ -1062,7 +1078,7 @@ class PredictiveHeatingSupport:
             base_heating_rate_c_per_h=self.chauffage_predictif_gain_chauffe_c_par_h,
             heating_rate_model=self.chauffage_predictif_rate_model,
             loss_model=self.chauffage_predictif_loss_model,
-            cover_state=self._predictive_cover_state(),
+            cover_state=self._predictive_expected_night_cover_state(),
             floor_delta_c=self._predictive_profile_floor_delta(kind),
             minimum_water_c=self.chauffage_predictif_temperature_min_eau_c,
             floor_recharge_c=self.chauffage_predictif_recharge_plancher_c,
@@ -1185,6 +1201,7 @@ class PredictiveHeatingSupport:
             "forecast": rows,
             "learned_heating_rates": self.chauffage_predictif_rate_model,
             "learned_night_losses": self.chauffage_predictif_loss_model,
+            "expected_night_cover": self._predictive_expected_night_cover_state(),
             "forecast_updated_at": self._iso_datetime(
                 self.chauffage_predictif_forecast_at
             ),

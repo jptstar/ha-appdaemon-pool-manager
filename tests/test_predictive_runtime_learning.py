@@ -224,3 +224,26 @@ def test_raw_pipe_temperature_does_not_replace_certified_learning_value(tmp_path
 
     value = app._predictive_water_temperature()
     assert value == 26.0
+
+
+def test_heating_estimate_starts_at_actual_pac_session_not_old_certification(tmp_path):
+    app = _make_runtime(tmp_path)
+    now = datetime.datetime.now()
+    app.chauffage_predictif_certified_water_c = 25.0
+    app.chauffage_predictif_certified_at = now - datetime.timedelta(hours=5)
+    app.pac_active = True
+    app.chauffage_predictif_gain_chauffe_c_par_h = 0.40
+    app.chauffage_predictif_rate_model = {
+        "smart": {"15_20": {"rate": 0.40, "count": 20}}
+    }
+    app.chauffage_preset_smart = "Smart"
+    app._predictive_pac_preset = lambda: "Smart"
+    app._heating_learning_session = {
+        "started_at": now - datetime.timedelta(hours=1),
+        "start_certified_at": app.chauffage_predictif_certified_at,
+        "water": 25.0,
+        "preset": "Smart",
+    }
+
+    estimated = app._predictive_water_temperature()
+    assert 25.35 <= estimated <= 25.45

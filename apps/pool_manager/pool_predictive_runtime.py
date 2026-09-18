@@ -976,6 +976,24 @@ class PredictiveHeatingSupport:
             )
 
             if self._pac_power_active():
+                # Heating gain starts when the PAC session starts, not when the
+                # last certified measurement was taken. A morning certification
+                # can precede a noon PAC start by hours.
+                session = self._heating_learning_session
+                if (
+                    session
+                    and session.get("start_certified_at")
+                    == self.chauffage_predictif_certified_at
+                    and isinstance(session.get("started_at"), datetime.datetime)
+                ):
+                    elapsed_h = max(
+                        0.0,
+                        (now - session["started_at"]).total_seconds() / 3600.0,
+                    )
+                    water = float(session.get("water", water))
+                else:
+                    elapsed_h = 0.0
+
                 rate = estimate_heating_rate(
                     self.chauffage_predictif_gain_chauffe_c_par_h,
                     self._predictive_pac_preset(),

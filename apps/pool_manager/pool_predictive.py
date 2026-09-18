@@ -844,17 +844,41 @@ def _candidate_plan(
         candidate_day_hours=candidate_day_hours,
     )
 
-    thermally_reachable = (
-        gain_today
-        <= today_turbo["capacity_c"]
-        + estimate_heating_rate(
-            base_rate,
-            turbo_preset,
-            _night_temperature(_forecast_by_date(forecast).get(today) or {}),
-            learned_model=heating_model,
-        ) * max(0.0, float(night_hours))
-        + stop_margin
-    ) or candidate["date"] > today
+    # Absolute reachability check: even the exceptional strategy (Turbo by
+    # day + Turbo at night) must be able to cover the full recovery. This keeps
+    # the planner from advertising an attractive but physically impossible day.
+    max_capacity = 0.0
+    cursor = today
+    by_date = _forecast_by_date(forecast)
+    while cursor <= candidate["date"]:
+        if cursor == today:
+            hours = today_day_hours_remaining
+        elif cursor == candidate["date"]:
+            hours = candidate_day_hours
+        else:
+            hours = day_hours
+
+        turbo_day = _day_capacity(
+            date=cursor,
+            forecast=forecast,
+            preset=turbo_preset,
+            hours=hours,
+            base_rate=base_rate,
+            heating_model=heating_model,
+        )
+        max_capacity += turbo_day["capacity_c"]
+
+        if cursor < candidate["date"]:
+            night_air = _night_temperature(by_date.get(cursor) or {})
+            max_capacity += estimate_heating_rate(
+                base_rate,
+                turbo_preset,
+                night_air,
+                learned_model=heating_model,
+            ) * max(0.0, float(night_hours))
+        cursor += datetime.timedelta(days=1)
+
+    thermally_reachable = required_gain <= max_capacity + stop_margin
 
     return {
         "candidate": candidate,
@@ -873,6 +897,7 @@ def _candidate_plan(
         "today_smart_capacity_c": today_smart["capacity_c"],
         "today_turbo_capacity_c": today_turbo["capacity_c"],
         "thermally_reachable": thermally_reachable,
+        "max_recovery_capacity_c": max_capacity,
         "daylight_active": bool(daylight_active),
     }
 

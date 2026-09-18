@@ -1,36 +1,40 @@
 # Mushroom — predictive pool heating
 
-Pool Manager can expose the optional virtual entity configured with `entity_chauffage_predictif_status`. The example below assumes `sensor.pool_predictive_heating`.
+Pool Manager can expose the optional virtual entity configured with `entity_chauffage_predictif_status`. The examples below assume `sensor.pool_predictive_heating`.
 
-The v0.7 planner no longer publishes fixed heating slots such as “07:00–11:00”. It publishes the thermal decision instead:
+The adaptive planner publishes a **daily thermal decision**, not fixed heating slots:
 
-- `next_swim_date`: next weather day considered worth preparing for;
-- `recovery_start_date`: first day on which recovery really needs to start;
-- `recommended_preset`: PAC preset selected by the learned thermal model;
-- `night_heating_allowed`: true only when daytime heating is insufficient;
-- `required_gain_c`: total recovery still required, including predicted losses;
-- `predicted_night_loss_c`: estimated cooling before the selected bathing day;
-- `projected_without_heat_c`: estimated water temperature if the PAC stays off;
-- `learned_heating_rates`: learned °C/h by PAC preset and outdoor-temperature range;
-- `learned_night_losses`: learned passive loss by cover state and water/air delta;
+- `action`: `WAIT`, `PRESERVE`, `PREHEAT` or `MAINTAIN`;
+- `certified_water_temperature`: last pool temperature accepted after the configured mixing cycle;
+- `certified_water_at`: time of that certified measurement;
+- `water_temperature_estimated`: current thermal estimate between certified measurements;
+- `measurement_active`: whether the 70% / 15-minute reference-mixing cycle is in progress;
+- `next_swim_date`: selected useful bathing day;
+- `next_swim_usage_score`: bathing score for the actual usage window;
+- `next_swim_weekend`: whether the selected day is Saturday/Sunday;
+- `recovery_start_date`: latest date from which recovery normally needs to begin;
+- `trajectory_target_temperature`: water temperature that is sufficient *today*;
+- `recommended_preset`: Smart/Turbo choice for the current action;
+- `night_heating`: true only for an exceptional night recovery;
+- `night_required_c`: missing recovery that cannot be covered during daytime;
+- `thermal_margin_c`: future Smart capacity minus remaining recovery requirement;
+- `predicted_night_loss_c`: predicted cooling before the selected bathing day;
+- `learned_heating_rates`: learned °C/h, power and kWh/°C by PAC preset and outdoor-temperature range;
+- `learned_night_losses`: learned passive night loss by cover state and water/air delta;
 - `forecast`: compact weather rows, up to 15 days.
-
-In each `forecast` row:
-
-- `swim: true` marks the selected bathing day;
-- `preheat: true` marks a day that belongs to the calculated recovery period;
-- `heating: true` means the day is part of recovery or is the bathing day;
-- `night_allowed: true` means the calculated recovery cannot be guaranteed with daytime heating alone.
 
 The compact Mushroom card is available in `examples/mushroom_predictive_heating.yaml`.
 
-For a separate compact 15-day Markdown table, this template is intentionally defensive about missing attributes:
+For a separate compact 15-day Markdown table:
 
 ```yaml
 type: markdown
 title: Piscine · prévision 15 jours
 content: |-
-  {% set f = state_attr('sensor.pool_predictive_heating', 'forecast') or [] %}
+  {% set e = 'sensor.pool_predictive_heating' %}
+  {% set f = state_attr(e, 'forecast') or [] %}
+  {% set selected = state_attr(e, 'next_swim_date') %}
+  {% set start = state_attr(e, 'recovery_start_date') %}
   {% set icons = {
     'sunny':'☀️', 'partlycloudy':'🌤️', 'cloudy':'☁️',
     'rainy':'🌧️', 'pouring':'🌧️', 'fog':'🌫️',
@@ -38,9 +42,12 @@ content: |-
     'lightning':'⛈️', 'lightning-rainy':'⛈️'
   } %}
 
-  | Jour | Météo | Max/Min | Score | Plan |
+  | Jour | Météo | Max/Min | Score usage | Plan |
   |:---|:---:|:---:|---:|:---|
   {% for d in f %}
-  | **{{ d.get('label','?') }}** {{ '🏊' if d.get('swim',false) else '' }} | {{ icons.get(d.get('condition',''), '🌡️') }} | **{{ d.get('temperature','?') }}°** / {{ d.get('templow','?') }}° | {{ d.get('strategic_score',0)|round(0)|int }} | {% if d.get('preheat',false) %}🔥 {{ d.get('preset','Smart') }}{% if d.get('night_allowed',false) %} 🌙{% endif %}{% elif d.get('swim',false) %}🌡️ maintien{% else %}—{% endif %} |
+  {% set date = d.get('date') %}
+  | **{{ d.get('label','?') }}** {{ '🏊' if d.get('swim',false) else '' }} | {{ icons.get(d.get('condition',''), '🌡️') }} | **{{ d.get('temperature','?') }}°** / {{ d.get('templow','?') }}° | {{ d.get('usage_score',d.get('strategic_score',0))|round(0)|int }} | {% if d.get('preheat',false) %}🔥 préparation{% elif d.get('swim',false) %}🌡️ maintien{% else %}—{% endif %} |
   {% endfor %}
 ```
+
+`brassage_nuit_intelligent: false` remains compatible: no periodic night mixing is needed. Night-loss learning compares the last certified measurement before the long stop with the first certified measurement after the next real mixing cycle.

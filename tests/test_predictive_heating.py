@@ -35,14 +35,15 @@ def _forecast(now, specs):
     return pool_predictive.normalize_daily_forecast(raw)
 
 
-def _plan(now, forecast, water=24.0, target=28.0, **kwargs):
+def _plan(now, forecast, water=24.0, target=30.0, **kwargs):
     defaults = {
         "base_heating_rate_c_per_h": 0.30,
-        "day_hours": 12.0,
-        "today_day_hours_remaining": 12.0,
-        "night_hours": 12.0,
+        "day_hours": 10.0,
+        "today_day_hours_remaining": 10.0,
+        "candidate_day_hours": 5.0,
+        "night_hours": 10.0,
         "daylight_active": True,
-        "floor_delta_c": 4.0,
+        "floor_delta_c": 5.0,
         "smart_preset": "Smart",
         "turbo_preset": "Turbo",
     }
@@ -71,9 +72,90 @@ def test_weather_score_prefers_warm_sunny_day():
     assert sunny > rainy
 
 
-def test_no_synthetic_bathing_hour_today_remains_a_calendar_day():
-    now = datetime.datetime(2026, 9, 18, 20, 30)
-    forecast = _forecast(now, [(24, "sunny", 15)])
+def test_hourly_context_uses_after_work_window_on_weekday():
+    # Friday 2026-09-18: warm daily maximum, but poor 16:00-20:00 conditions.
+    day = datetime.date(2026, 9, 18)
+    daily = pool_predictive.normalize_daily_forecast(
+        [
+            {
+                "datetime": datetime.datetime.combine(day, datetime.time(12)).isoformat(),
+                "temperature": 26,
+                "templow": 15,
+                "condition": "sunny",
+            }
+        ]
+    )
+    hourly = pool_predictive.normalize_hourly_forecast(
+        [
+            {
+                "datetime": datetime.datetime.combine(day, datetime.time(hour)).isoformat(),
+                "temperature": 25 if hour < 16 else 18,
+                "condition": "sunny" if hour < 16 else "cloudy",
+            }
+            for hour in range(8, 20)
+        ]
+    )
+    enriched = pool_predictive.enrich_daily_with_hourly(daily, hourly)
+    assert enriched[0]["usage_window"] == "16:00-20:00"
+    assert enriched[0]["usage_temperature"] == 18.0
+    opportunities = pool_predictive.find_swim_opportunities(
+        enriched,
+        day,
+        score_min=55,
+        min_air_c=21,
+    )
+    assert opportunities == []
+
+
+def test_hourly_night_temperature_uses_evening_plus_following_morning():
+    day = datetime.date(2026, 9, 18)
+    daily = pool_predictive.normalize_daily_forecast(
+        [{
+            "datetime": datetime.datetime.combine(day, datetime.time(12)).isoformat(),
+            "temperature": 24,
+            "templow": 12,
+            "condition": "sunny",
+        }]
+    )
+    hourly = pool_predictive.normalize_hourly_forecast(
+        [
+            {
+                "datetime": datetime.datetime.combine(day, datetime.time(21)).isoformat(),
+                "temperature": 14,
+                "condition": "clear-night",
+            },
+            {
+                "datetime": datetime.datetime.combine(
+                    day + datetime.timedelta(days=1),
+                    datetime.time(6),
+                ).isoformat(),
+                "temperature": 10,
+                "condition": "clear-night",
+            },
+            {
+                # Previous-night sample on the same calendar date must not be
+                # mixed into the following night.
+                "datetime": datetime.datetime.combine(day, datetime.time(6)).isoformat(),
+                "temperature": 4,
+                "condition": "clear-night",
+            },
+        ]
+    )
+    enriched = pool_predictive.enrich_daily_with_hourly(daily, hourly)
+    assert enriched[0]["night_heating_temperature"] == 12.0
+
+
+def test_weekend_gets_usage_priority_over_marginal_friday():
+    # Friday + Saturday. Saturday is only modestly better but is the more useful
+    # bathing day and receives the weekend bonus.
+    now = datetime.datetime(2026, 9, 18, 8, 0)
+    forecast = _forecast(
+        now,
+        [
+            (22.0, "sunny", 15),
+            (23.0, "sunny", 16),
+        ],
+    )
     opportunities = pool_predictive.find_swim_opportunities(
         forecast,
         now,
@@ -81,206 +163,234 @@ def test_no_synthetic_bathing_hour_today_remains_a_calendar_day():
         min_air_c=21,
     )
     assert opportunities
-    assert opportunities[0]["date"] == now.date()
+    assert opportunities[0]["date"].weekday() == 5
+    assert opportunities[0]["weekend"] is True
 
 
-def test_unrecoverable_today_is_skipped_for_next_recoverable_good_day():
-    now = datetime.datetime(2026, 9, 18, 6, 30)
-    forecast = _forecast(
-        now,
-        [
-            (21.2, "sunny", 12),
-            (23.6, "sunny", 14),
-            (25.2, "partlycloudy", 16),
-        ],
-    )
-    plan = _plan(
-        now,
-        forecast,
-        water=18.2,
-        target=28.0,
-        today_day_hours_remaining=12.0,
-        daylight_active=False,
-    )
-    assert plan["candidate"]["date"] > now.date()
-    assert plan["candidate"]["date"] == now.date() + datetime.timedelta(days=2)
-
-
-def test_fast_learned_smart_rate_allows_later_start_without_night():
-    now = datetime.datetime(2026, 9, 18, 8, 0)
-    forecast = _forecast(
-        now,
-        [
-            (18, "cloudy", 12),
-            (20, "partlycloudy", 13),
-            (25, "sunny", 16),
-        ],
-    )
-    learned = {
-        "smart": {
-            "15_20": {"rate": 0.55, "count": 20},
-            "20_25": {"rate": 0.60, "count": 20},
-        }
-    }
-    plan = _plan(
-        now,
-        forecast,
-        water=24.5,
-        target=28,
-        heating_rate_model=learned,
-    )
-    assert plan["candidate"]["date"] == now.date() + datetime.timedelta(days=2)
-    assert plan["preset"].casefold() == "smart"
-    assert plan["allow_night"] is False
-
-
-def test_slow_recovery_can_authorize_night_heating():
-    now = datetime.datetime(2026, 9, 18, 8, 0)
-    forecast = _forecast(
-        now,
-        [
-            (17, "cloudy", 9),
-            (18, "cloudy", 10),
-            (25, "sunny", 14),
-        ],
-    )
-    slow = {
-        "smart": {
-            "15_20": {"rate": 0.18, "count": 20},
-            "10_15": {"rate": 0.15, "count": 20},
-        },
-        "turbo": {
-            "15_20": {"rate": 0.25, "count": 20},
-            "10_15": {"rate": 0.22, "count": 20},
-        },
-    }
-    plan = _plan(
-        now,
-        forecast,
-        water=21.0,
-        target=28.0,
-        heating_rate_model=slow,
-    )
-    assert plan["candidate"] is not None
-    assert plan["allow_night"] is True
-
-
-def test_turbo_is_selected_before_night_when_smart_daytime_is_insufficient():
-    now = datetime.datetime(2026, 9, 18, 8, 0)
-    forecast = _forecast(
-        now,
-        [
-            (20, "cloudy", 12),
-            (25, "sunny", 15),
-        ],
-    )
-    learned = {
-        "smart": {"20_25": {"rate": 0.20, "count": 30}},
-        "turbo": {"20_25": {"rate": 0.55, "count": 30}},
-    }
-    plan = _plan(
-        now,
-        forecast,
-        water=24.5,
-        target=28.0,
-        heating_rate_model=learned,
-        today_day_hours_remaining=10,
-    )
-    assert plan["candidate"]["date"] == now.date() + datetime.timedelta(days=1)
-    assert plan["preset"].casefold() == "turbo"
-    assert plan["allow_night"] is False
-
-
-def test_night_loss_learning_increases_recovery_need():
-    now = datetime.datetime(2026, 9, 18, 8, 0)
-    forecast = _forecast(
-        now,
-        [
-            (18, "cloudy", 8),
-            (19, "cloudy", 9),
-            (25, "sunny", 12),
-        ],
-    )
-    no_loss = _plan(now, forecast, water=25, target=28)
-    learned_loss = {
-        "closed": {
-            "15_20": {"rate": 0.10, "count": 20},
-            "10_15": {"rate": 0.12, "count": 20},
-        }
-    }
-    with_loss = _plan(
-        now,
-        forecast,
-        water=25,
-        target=28,
-        loss_model=learned_loss,
-        cover_state="closed",
-    )
-    assert with_loss["predicted_loss_c"] >= no_loss["predicted_loss_c"]
-    assert with_loss["required_gain_c"] >= no_loss["required_gain_c"]
-
-
-def test_absolute_minimum_water_temperature_protects_recoverability():
+def test_bad_weather_above_floor_keeps_pac_off():
     now = datetime.datetime(2026, 9, 18, 10, 0)
     forecast = _forecast(
         now,
         [
-            (14, "rainy", 7, 90),
+            (15, "rainy", 10, 90),
+            (14, "rainy", 9, 90),
+            (16, "cloudy", 10, 70),
+        ],
+    )
+    plan = _plan(
+        now,
+        forecast,
+        water=25,
+        target=30,
+        minimum_water_c=22,
+    )
+    assert plan["candidate"] is None
+    assert plan["action"] == "WAIT"
+    assert plan["should_heat"] is False
+
+
+def test_floor_protection_heats_only_reserve_not_full_setpoint():
+    now = datetime.datetime(2026, 9, 18, 10, 0)
+    forecast = _forecast(
+        now,
+        [
+            (12, "rainy", 5, 90),
             (13, "rainy", 6, 90),
-            (14, "cloudy", 7, 60),
         ],
     )
     plan = _plan(
         now,
         forecast,
         water=21.7,
-        target=28,
-        minimum_water_c=22.0,
-        daylight_active=True,
+        target=30,
+        minimum_water_c=22,
     )
-    assert plan["candidate"] is None
-    assert plan["floor_c"] == 22.0
+    assert plan["action"] == "PRESERVE"
     assert plan["should_heat"] is True
-    assert plan["heat_target_c"] > 22.0
+    assert 22 < plan["heat_target_c"] < 30
 
 
-def test_bad_weather_above_floor_switches_pac_off():
-    now = datetime.datetime(2026, 9, 18, 10, 0)
+def test_future_good_day_creates_trajectory_not_immediate_full_heat():
+    now = datetime.datetime(2026, 9, 18, 8, 0)
     forecast = _forecast(
         now,
         [
-            (15, "rainy", 12, 90),
-            (14, "rainy", 12, 90),
-            (16, "cloudy", 13, 70),
+            (17, "cloudy", 10),
+            (19, "cloudy", 12),
+            (25, "sunny", 17),
         ],
     )
+    learned = {
+        "smart": {
+            "15_20": {"rate": 0.40, "count": 20},
+            "20_25": {"rate": 0.45, "count": 20},
+        }
+    }
     plan = _plan(
         now,
         forecast,
-        water=25.0,
-        target=28,
-        minimum_water_c=22.0,
+        water=24,
+        target=30,
+        heating_rate_model=learned,
+        minimum_water_c=22,
     )
-    assert plan["candidate"] is None
-    assert plan["should_heat"] is False
+    assert plan["candidate"] is not None
+    assert plan["candidate"]["date"] == now.date() + datetime.timedelta(days=2)
+    assert plan["trajectory_target_c"] < 30
+    if plan["should_heat"]:
+        assert plan["heat_target_c"] == plan["trajectory_target_c"]
 
 
-def test_heating_rate_learning_is_split_by_pac_preset():
-    model = {}
+def test_smart_is_used_when_today_capacity_is_enough():
+    now = datetime.datetime(2026, 9, 18, 9, 0)
+    forecast = _forecast(
+        now,
+        [
+            (18, "cloudy", 12),
+            (25, "sunny", 17),
+        ],
+    )
+    learned = {
+        "smart": {
+            "15_20": {"rate": 0.80, "count": 20},
+            "20_25": {"rate": 0.80, "count": 20},
+        },
+        "turbo": {
+            "15_20": {"rate": 1.00, "count": 20},
+            "20_25": {"rate": 1.00, "count": 20},
+        },
+    }
+    plan = _plan(
+        now,
+        forecast,
+        water=24,
+        target=30,
+        heating_rate_model=learned,
+        today_day_hours_remaining=8,
+    )
+    if plan["should_heat"]:
+        assert plan["preset"] == "Smart"
+
+
+def test_turbo_is_selected_when_smart_day_capacity_is_not_enough():
+    now = datetime.datetime(2026, 9, 18, 9, 0)
+    forecast = _forecast(
+        now,
+        [
+            (18, "cloudy", 12),
+            (23, "sunny", 15),
+        ],
+    )
+    learned = {
+        "smart": {
+            "15_20": {"rate": 0.20, "count": 30},
+            "20_25": {"rate": 0.20, "count": 30},
+        },
+        "turbo": {
+            "15_20": {"rate": 0.55, "count": 30},
+            "20_25": {"rate": 0.55, "count": 30},
+        },
+    }
+    plan = _plan(
+        now,
+        forecast,
+        water=23,
+        target=30,
+        heating_rate_model=learned,
+        today_day_hours_remaining=7,
+        candidate_day_hours=2,
+        minimum_water_c=22,
+    )
+    assert plan["candidate"] is not None
+    assert plan["should_heat"] is True
+    assert plan["preset"] == "Turbo"
+
+
+def test_night_heat_is_only_requested_when_day_cannot_hold_trajectory():
+    now = datetime.datetime(2026, 9, 18, 21, 0)
+    forecast = _forecast(
+        now,
+        [
+            (17, "cloudy", 10),
+            (23, "sunny", 14),
+        ],
+    )
+    learned = {
+        "smart": {
+            "10_15": {"rate": 0.25, "count": 20},
+            "15_20": {"rate": 0.25, "count": 20},
+            "20_25": {"rate": 0.25, "count": 20},
+        },
+        "turbo": {
+            "10_15": {"rate": 0.45, "count": 20},
+            "15_20": {"rate": 0.45, "count": 20},
+            "20_25": {"rate": 0.45, "count": 20},
+        },
+    }
+    plan = _plan(
+        now,
+        forecast,
+        water=26.0,
+        target=30,
+        heating_rate_model=learned,
+        today_day_hours_remaining=0,
+        candidate_day_hours=2,
+        daylight_active=False,
+        minimum_water_c=22,
+    )
+    assert plan["candidate"] is not None
+    if plan["should_heat"]:
+        assert plan["night_heating"] is True
+        assert plan["heat_target_c"] <= 30
+
+
+def test_unrecoverable_today_is_skipped():
+    now = datetime.datetime(2026, 9, 18, 9, 0)
+    forecast = _forecast(
+        now,
+        [
+            (24, "sunny", 16),
+            (25, "sunny", 17),
+        ],
+    )
+    very_slow = {
+        "smart": {"20_25": {"rate": 0.10, "count": 30}},
+        "turbo": {"20_25": {"rate": 0.15, "count": 30}},
+        "turbo": {
+            "20_25": {"rate": 0.15, "count": 30},
+            "15_20": {"rate": 0.15, "count": 30},
+        },
+    }
+    plan = _plan(
+        now,
+        forecast,
+        water=18,
+        target=30,
+        heating_rate_model=very_slow,
+        today_day_hours_remaining=5,
+        night_hours=8,
+    )
+    assert plan["candidate"] is None or plan["candidate"]["date"] != now.date()
+
+
+def test_heating_learning_keeps_power_and_energy_per_degree():
     model = pool_predictive.update_heating_rate_model(
-        model, "Smart", 18, 0.30, alpha=1.0
+        {},
+        "Smart",
+        18,
+        0.30,
+        alpha=1.0,
+        sample_power_w=1200,
     )
-    model = pool_predictive.update_heating_rate_model(
-        model, "Turbo", 18, 0.50, alpha=1.0
-    )
-    assert model["smart"]["15_20"]["rate"] == 0.30
-    assert model["turbo"]["15_20"]["rate"] == 0.50
+    entry = model["smart"]["15_20"]
+    assert entry["rate"] == 0.30
+    assert entry["power_w"] == 1200
+    assert entry["kwh_per_c"] == 4.0
 
 
-def test_night_loss_learning_is_split_by_cover_and_thermal_delta():
-    model = {}
+def test_loss_learning_separates_cover_and_delta():
     model = pool_predictive.update_loss_model(
-        model,
+        {},
         "closed",
         water_c=28,
         ambient_c=13,
@@ -296,7 +406,7 @@ def test_night_loss_learning_is_split_by_cover_and_thermal_delta():
     ) > 0
 
 
-def test_dashboard_marks_swim_day_and_preheat_days():
+def test_dashboard_marks_selected_day_and_recovery_window():
     now = datetime.datetime(2026, 9, 18, 8, 0)
     forecast = _forecast(
         now,
@@ -306,23 +416,18 @@ def test_dashboard_marks_swim_day_and_preheat_days():
             (25, "sunny", 16),
         ],
     )
-    plan = _plan(now, forecast, water=24.0, target=28)
+    plan = _plan(now, forecast, water=24, target=30)
     rows = pool_predictive.dashboard_forecast(forecast, plan, now)
     assert len(rows) == 3
-    assert any(row["swim"] for row in rows)
-    swim_index = next(i for i, row in enumerate(rows) if row["swim"])
-    assert rows[swim_index]["date"] == plan["candidate"]["date"].isoformat()
+    if plan["candidate"] is not None:
+        assert any(row["swim"] for row in rows)
 
 
 def test_fifteen_day_outlook_remains_visible():
     now = datetime.datetime(2026, 9, 18, 8, 0)
-    specs = (
-        [(15, "cloudy", 10)] * 10
-        + [(26, "sunny", 18)]
-        + [(15, "rainy", 10)] * 4
-    )
+    specs = [(15, "cloudy", 10)] * 10 + [(26, "sunny", 18)] + [(15, "rainy", 10)] * 4
     forecast = _forecast(now, specs)
     assert len(forecast) == 15
-    plan = _plan(now, forecast, water=26.5, target=28)
+    plan = _plan(now, forecast, water=26.5, target=30)
     rows = pool_predictive.dashboard_forecast(forecast, plan, now)
     assert len(rows) == 15

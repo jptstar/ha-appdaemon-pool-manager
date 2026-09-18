@@ -103,6 +103,22 @@ class DevicesMixin:
 
     def set_pump_percentage(self, percentage, force=False):
         percentage = int(max(0, min(100, percentage)))
+
+        # A predictive certified-water measurement is a short, explicit
+        # hydraulic reference cycle. While it is active no lower strategy
+        # command may pull the pump below the configured mixing speed.
+        if getattr(self, "chauffage_predictif_measurement_active", False):
+            percentage = max(
+                percentage,
+                int(
+                    getattr(
+                        self,
+                        "chauffage_predictif_mesure_vitesse_pct",
+                        70,
+                    )
+                ),
+            )
+
         now = datetime.datetime.now()
 
         current = self.get_fan_percentage()

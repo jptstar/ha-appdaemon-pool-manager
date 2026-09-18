@@ -113,9 +113,16 @@ The PAC remains off outside the configured automatic window unless a temporary H
 
 ## Season-wide predictive heating
 
-With `chauffage_predictif: true`, the same weather-aware engine is used in **Automatique** and **Fin de saison • Smart**. The implementation no longer invents a bathing hour or fixed morning/afternoon heating slots.
+With `chauffage_predictif: true`, **Automatique** and **Fin de saison • Smart** use the same self-learning thermal engine. The controller no longer builds a rigid schedule of fixed heating slots. It makes a clear daily decision:
 
-The controller keeps the weather outlook up to 15 days, scores credible bathing days, then asks a simpler question: **when does this pool really need to start heating so the next good day is thermally reachable?**
+```text
+WAIT       -> do not heat
+PRESERVE   -> protect recoverability only
+PREHEAT    -> heat today to the thermal trajectory target
+MAINTAIN   -> selected bathing day: recover/hold the requested water target
+```
+
+The weather outlook remains visible up to 15 days, but a distant forecast does not trigger immediate heating. Pool Manager works backwards from useful bathing windows and asks: **how warm does the pool need to be today so the next good day is still reachable without wasting heat?**
 
 ```yaml
 chauffage_predictif: true
@@ -127,82 +134,116 @@ chauffage_predictif_temperature_baignade_min_c: 21
 chauffage_predictif_temperature_baignade_ideale_c: 26
 chauffage_predictif_score_baignade_min: 55
 
-# Initial fallback until enough real samples have been learned.
+# Fallbacks while the installation is still learning.
 chauffage_predictif_gain_chauffe_c_par_h: 0.30
 chauffage_predictif_perte_nuit_delta10_c_par_h: 0.05
 
 chauffage_predictif_apprentissage: true
-chauffage_predictif_apprentissage_min_s: 1800
-chauffage_predictif_apprentissage_alpha: 0.25
+
+# Certified pool-water measurement.
+chauffage_predictif_mesure_vitesse_pct: 70
+chauffage_predictif_mesure_tempo_s: 900
+chauffage_predictif_mesure_stabilite_s: 120
+chauffage_predictif_mesure_variation_max_c: 0.15
 
 # Optional absolute recoverability floor:
 # chauffage_predictif_temperature_min_eau_c: 22
 ```
 
+### Certified water temperature
+
+A pipe sensor is not treated as the pool merely because water is moving. **47% remains the normal hydraulic low limit**, but the thermal model only certifies a pool-water temperature after the pump has run continuously at the configured reference speed — **70% for 15 minutes by default** — followed by a short stability check.
+
+Lower-speed values can still be used by normal filtration control, but they never train the thermal model. `mem_temp` also remains useful as an operational fallback while the pump is stopped, but it is never accepted as a new learning sample.
+
+Pool Manager does not start a measurement cycle merely because the weather forecast exists. If normal filtration is already running and a selected bathing opportunity is near, it temporarily holds the pump at the certification speed. If the controller is about to make a real heating decision from stale data, it first performs the certified mixing cycle, then decides.
+
 ### What it learns
 
-The thermal model learns automatically from the installation instead of assuming one fixed heating speed:
+The persistent thermal model learns from real certified measurements:
 
-- real water-temperature gain in °C/h, separately by PAC preset (Smart, Turbo, etc.) and outdoor-temperature range;
-- passive overnight cooling in °C/h as a function of the water/air temperature difference and pool-cover state;
-- sample counts are retained and blended conservatively so one unusual night or short PAC run cannot overwrite the model.
+- net water-temperature gain in °C/h by PAC preset (Smart, Turbo, etc.) and outdoor-temperature range;
+- average PAC electrical power for the same learned samples, including derived kWh/°C when available;
+- passive overnight loss in °C/h from two certified pool measurements, water/air temperature difference and real cover state;
+- only clean samples are accepted: PAC activity contaminates a passive-loss sample, and a cover-state change rejects it.
 
-Learning is persisted to `pool_manager_thermal_learning.json` one level above the HACS-managed package by default, so an AppDaemon restart or HACS update does not erase the learned model. A custom path can be supplied with `chauffage_predictif_learning_file`.
+For night-loss learning, the start point is the **last certified pool temperature before the long stop**, and the end point is the **first new certified pool temperature after circulation has mixed the pool again**. Stale pipe values and `mem_temp` do not enter that calculation.
 
-### How it decides when to heat
+The model is persisted to `pool_manager_thermal_learning.json` outside the HACS-managed package by default, so AppDaemon restarts and HACS updates keep the learned behavior.
 
-For each credible future bathing day the planner estimates:
+### Weather and actual use
 
-1. the water-temperature recovery still required;
-2. predicted passive losses before that day;
-3. available daytime heating capacity from the learned PAC model;
-4. whether Smart is sufficient;
-5. whether Turbo is needed;
-6. only as a last resort, whether heating through part of the night is required.
+Daily weather keeps the strategic 15-day view. When the configured weather provider supports hourly forecasts, Pool Manager also refines near-term decisions with hourly conditions:
 
-The preference order is therefore:
+- weekdays prioritize the normal after-work bathing window, approximately **16:00-20:00**;
+- Saturdays and Sundays receive additional usage priority and use a broader daytime window;
+- PAC capacity uses near-term average daytime temperature instead of blindly using the daily maximum.
+
+A marginal earlier day is therefore not automatically chosen when a much better nearby weekend or late-afternoon window exists. A candidate must also be physically recoverable with the learned PAC performance.
+
+### Thermal trajectory instead of heating hours
+
+The planner does not tell the user “heat for 3 h 42 today”. It computes today's **trajectory target**.
+
+Example:
 
 ```text
-Smart daytime
-    -> Turbo daytime
-    -> Smart day + night
-    -> Turbo day + night
+Saturday bathing target : 30.0 °C
+Friday required trajectory: 28.0 °C
+Thursday required trajectory: 25.5 °C
+
+Thursday morning water: 26.0 °C
+-> WAIT
+
+Friday morning water: 26.8 °C
+-> PREHEAT to 28.0 °C
 ```
 
-There is no fixed "J-2" or "J-5" rule. If the learned pool/PAC behavior says one day is enough, heating starts one day before. If a long cold spell has pulled the water much lower and two or three days are needed, recovery starts earlier automatically.
+If Smart can keep the trajectory, Smart is used. Turbo is selected only when Smart no longer has enough remaining capacity. If daytime recovery is still insufficient, an exceptional night recovery is allowed only until the trajectory is restored; “night allowed” is not an instruction to run the PAC all night.
 
-A weather-friendly day is not selected merely because its forecast score is high: it must also be **thermally recoverable**. This prevents a marginal J0 day from being marked as the bathing day when the water is still far below target and there is not enough daylight left to recover it.
+There is no fixed J-1/J-2/J-5 rule. One or two days of anticipation is common when that is enough, while an unusually cold pool can naturally require an earlier start.
 
-### Bad-weather behavior and minimum water temperature
+### Summer, autumn and bad weather
 
-The same principle applies in summer and autumn. If several poor days are forecast, the PAC can stop instead of holding the full setpoint unnecessarily. The controller keeps watching the forecast and restarts only when a useful bathing window approaches.
+The same engine naturally behaves differently by season. In summer, frequent good weather, warm air and small losses tend to keep the trajectory close to the normal water target with little PAC work. If several poor days arrive, the PAC can stop instead of maintaining full temperature unnecessarily.
 
-To avoid letting the pool become impractical to recover, an optional absolute floor can be configured:
+Near autumn, larger losses and lower PAC performance make full-time 30 °C maintenance expensive. Pool Manager then targets useful bathing days, allows the pool to cool between them, and preserves only enough thermal reserve to keep the next useful window recoverable.
+
+An optional absolute floor can still be configured:
 
 ```yaml
 chauffage_predictif_temperature_min_eau_c: 22
 ```
 
-Above the floor and with no useful bathing day, the PAC stays off. If forecast overnight losses would cross the floor, Pool Manager recharges only the thermal reserve. When the absolute floor is omitted, the previous profile-based fallbacks remain: Automatique uses `target - 2 °C` and Fin de saison uses `target - 4 °C` by default.
+Above that floor and without a useful bathing window, the PAC stays off. Forecast losses can trigger a small PRESERVE action before the pool becomes difficult to recover.
 
-`brassage_nuit_intelligent: false` remains independent. It disables periodic night circulation used only for mixing/measurement; it does **not** prohibit an exceptional pump + PAC run when the thermal planner proves that night heating is required for recovery.
+The real cover entity is used for learning. Future overnight forecasts use `chauffage_predictif_volet_nuit_prevu` (default `closed` when a cover entity is configured), so an open daytime cover does not make the planner assume that every future night will also be open.
+
+`brassage_nuit_intelligent: false` remains independent: it disables periodic night mixing, but it does not prohibit an exceptional pump + PAC recovery when the thermal trajectory genuinely requires it.
 
 ### Dashboard sensor
 
-If `entity_chauffage_predictif_status` is configured, AppDaemon publishes one virtual sensor. Useful attributes include:
+If `entity_chauffage_predictif_status` is configured, useful attributes now include:
 
+- `action`
+- `water_temperature_estimated`
+- `certified_water_temperature`
+- `certified_water_at`
+- `measurement_active`
 - `next_swim_date`
+- `next_swim_usage_score`
+- `next_swim_weekend`
 - `recovery_start_date`
+- `trajectory_target_temperature`
 - `recommended_preset`
-- `night_heating_allowed`
+- `night_heating`
+- `night_required_c`
+- `thermal_margin_c`
 - `required_gain_c`
 - `predicted_night_loss_c`
-- `projected_without_heat_c`
 - `learned_heating_rates`
 - `learned_night_losses`
-- `forecast` (up to 15 compact rows)
-
-The forecast rows mark the selected bathing day with `swim: true` and recovery days with `preheat: true`.
+- `forecast`
 
 ## Heating override boundary
 

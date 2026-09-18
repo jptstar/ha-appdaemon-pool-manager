@@ -1,4 +1,4 @@
-# Compact Mushroom dashboard example for v0.7 predictive heating.
+# Compact Mushroom dashboard example for adaptive predictive heating.
 # Replace sensor.pool_predictive_heating if you configured another entity id.
 
 type: custom:mushroom-template-card
@@ -8,27 +8,37 @@ primary: >-
   {{ states(e) }}
 secondary: >-
   {% set e = 'sensor.pool_predictive_heating' %}
+  {% set action = state_attr(e, 'action') %}
   {% set swim = state_attr(e, 'next_swim_date') %}
   {% set start = state_attr(e, 'recovery_start_date') %}
   {% set preset = state_attr(e, 'recommended_preset') %}
-  {% set water = state_attr(e, 'water_temperature') %}
+  {% set estimated = state_attr(e, 'water_temperature_estimated') %}
+  {% set certified = state_attr(e, 'certified_water_temperature') %}
+  {% set trajectory = state_attr(e, 'trajectory_target_temperature') %}
   {% set target = state_attr(e, 'target_temperature') %}
-  {% set night = state_attr(e, 'night_heating_allowed') %}
-  {% if water is not none and target is not none %}
-  🌡️ {{ water }} → {{ target }} °C
+  {% set night = state_attr(e, 'night_heating') %}
+  {% if estimated is not none %}
+  🌡️ Eau ~{{ estimated }}°{% if certified is not none %} · mesurée {{ certified }}°{% endif %}
+  {% endif %}
+  {% if trajectory is not none %}
+   · trajectoire {{ trajectory }}°
   {% endif %}
   {% if swim %}
-   · 🏊 {{ swim }}{% if start %} · préchauffe {{ start }}{% endif %}
-  {% else %}
-   · ⏸ pas de journée retenue
+   · 🏊 {{ swim }}{% if start %} · reprise {{ start }}{% endif %}
   {% endif %}
-  {% if state_attr(e, 'heating_now') %}
-   · 🔥 {{ preset or 'Smart' }}{% if night %} · nuit autorisée{% endif %}
+  {% if state_attr(e, 'measurement_active') %}
+   · 🌀 mesure 70%
+  {% elif state_attr(e, 'heating_now') %}
+   · 🔥 {{ preset or 'Smart' }}{% if night %} 🌙{% endif %}
+  {% elif action %}
+   · {{ action }}
   {% endif %}
 icon: mdi:pool-thermometer
 icon_color: >-
   {% set e = 'sensor.pool_predictive_heating' %}
-  {% if state_attr(e, 'heating_now') %}
+  {% if state_attr(e, 'measurement_active') %}
+    cyan
+  {% elif state_attr(e, 'heating_now') %}
     red
   {% elif state_attr(e, 'next_swim_date') %}
     blue

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.7.1 - Certified adaptive thermal decisions
+
+- Replace the remaining day-capacity scheduler semantics with a decisive daily action model: `WAIT`, `PRESERVE`, `PREHEAT` or `MAINTAIN`.
+- Add a daily thermal trajectory target so future good weather does not force an immediate return to the full water setpoint; the controller heats only as much as is needed today to keep the selected bathing day recoverable.
+- Add certified pool-water measurements: 47% remains the hydraulic low limit, but the thermal model only certifies water after 15 minutes at 70% by default plus a short stability check.
+- Prevent `mem_temp` and low-flow/stale pipe readings from entering thermal learning.
+- Learn passive overnight loss only between two certified pool measurements; reject samples contaminated by PAC activity or a cover-state change.
+- Learn PAC Smart/Turbo gain from certified measurements and retain average electrical power / derived kWh per °C when available.
+- Re-certify periodically during long PAC runs so the learned gain model can continue improving automatically.
+- Use the last certified temperature plus the learned model as an estimate while the pump is stopped, then correct it on the next certified mixing cycle.
+- Add optional near-term hourly-weather refinement. Weekdays prioritize approximately 16:00-20:00; weekends receive additional bathing priority and a broader usage window.
+- Prefer a better nearby bathing opportunity over the first marginal weather day, while still avoiding excessive delay.
+- Reject weather-friendly days that are physically unreachable even with exceptional Turbo/day + Turbo/night recovery.
+- Prefer Smart when it can preserve the trajectory; select Turbo only when Smart has insufficient remaining capacity.
+- Allow night recovery only when daytime capacity cannot restore the trajectory, and stop again once the trajectory target is reached rather than running through the whole night.
+- Keep long bad-weather periods PAC-off above the recoverability floor in both Automatique and Fin de saison • Smart.
+- Separate the real current cover state used for learning from the expected future night-cover state used for planning; future nights default to `closed` when a cover entity is configured.
+- Expose certified temperature, measurement state, daily action, trajectory target, thermal margin, usage-window score and night-recovery need through the predictive status sensor.
+
+
 ## 0.7.0 - Self-learning thermal recovery planner
 
 - Replace the fixed bathing-hour / heating-slot scheduler with a day-level thermal recovery planner.

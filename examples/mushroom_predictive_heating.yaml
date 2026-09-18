@@ -1,4 +1,4 @@
-# Mushroom dashboard example for v0.6.0 predictive heating.
+# Compact Mushroom dashboard example for v0.7 predictive heating.
 # Replace sensor.pool_predictive_heating if you configured another entity id.
 
 type: custom:mushroom-template-card
@@ -8,54 +8,33 @@ primary: >-
   {{ states(e) }}
 secondary: >-
   {% set e = 'sensor.pool_predictive_heating' %}
-  {% set next_swim = state_attr(e, 'next_swim_date') %}
-  {% set ready = state_attr(e, 'ready_by') %}
-  {% set next_heat = state_attr(e, 'next_heating_start') %}
+  {% set swim = state_attr(e, 'next_swim_date') %}
+  {% set start = state_attr(e, 'recovery_start_date') %}
+  {% set preset = state_attr(e, 'recommended_preset') %}
   {% set water = state_attr(e, 'water_temperature') %}
   {% set target = state_attr(e, 'target_temperature') %}
+  {% set night = state_attr(e, 'night_heating_allowed') %}
   {% if water is not none and target is not none %}
-  🌡️ Eau {{ water }} → {{ target }} °C
+  🌡️ {{ water }} → {{ target }} °C
   {% endif %}
-  {% if next_swim %}
-  🏊 Prochaine baignade : {{ next_swim }}{% if ready %} · eau prête {{ as_datetime(ready).strftime('%a %H:%M') }}{% endif %}
+  {% if swim %}
+   · 🏊 {{ swim }}{% if start %} · préchauffe {{ start }}{% endif %}
   {% else %}
-  🏊 Aucune journée retenue
+   · ⏸ pas de journée retenue
   {% endif %}
   {% if state_attr(e, 'heating_now') %}
-  🔥 Chauffe maintenant{% if state_attr(e, 'active_heating_end') %} jusqu'à {{ as_datetime(state_attr(e, 'active_heating_end')).strftime('%H:%M') }}{% endif %}
-  {% elif next_heat %}
-  🔥 Prochaine chauffe : {{ as_datetime(next_heat).strftime('%a %H:%M') }}
-  {% else %}
-  ⏸ Pas de chauffe planifiée
+   · 🔥 {{ preset or 'Smart' }}{% if night %} · nuit autorisée{% endif %}
   {% endif %}
-
-  {% set icons = {
-    'sunny': '☀️',
-    'partlycloudy': '⛅',
-    'cloudy': '☁️',
-    'rainy': '🌧️',
-    'pouring': '🌧️',
-    'windy': '💨',
-    'windy-variant': '💨',
-    'fog': '🌫️',
-    'lightning': '⛈️',
-    'lightning-rainy': '⛈️'
-  } %}
-  {% for d in (state_attr(e, 'forecast') or [])[:15] %}
-  {{ d.label }} {{ icons.get(d.condition, '🌤️') }}{% if d.temperature is not none %} {{ d.temperature | round(0) }}°{% endif %} · {{ d.score | round(0) }}{% if d.swim %} 🏊{% endif %}{% if d.heating %} 🔥{% if d.heating_slots %} {{ d.heating_slots[0].start }}–{{ d.heating_slots[0].end }}{% endif %}{% else %} ⏸{% endif %}
-  {% endfor %}
 icon: mdi:pool-thermometer
 icon_color: >-
   {% set e = 'sensor.pool_predictive_heating' %}
   {% if state_attr(e, 'heating_now') %}
     red
-  {% elif state_attr(e, 'last_chance') %}
-    orange
   {% elif state_attr(e, 'next_swim_date') %}
     blue
   {% else %}
     grey
   {% endif %}
-multiline_secondary: true
+multiline_secondary: false
 tap_action:
   action: more-info

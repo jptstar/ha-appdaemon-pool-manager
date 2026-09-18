@@ -596,7 +596,6 @@ def _predicted_loss_path(
     by_date = _forecast_by_date(forecast)
     projected = float(water_c)
     total = 0.0
-    rows = []
     cursor = start_date
     while cursor < end_date:
         entry = by_date.get(cursor) or {}
@@ -611,16 +610,8 @@ def _predicted_loss_path(
         loss = rate * max(0.0, float(night_hours))
         projected -= loss
         total += loss
-        rows.append(
-            {
-                "date": cursor,
-                "ambient_c": ambient,
-                "loss_c": round(loss, 3),
-                "projected_water_c": round(projected, 3),
-            }
-        )
         cursor += datetime.timedelta(days=1)
-    return total, projected, rows
+    return total, projected
 
 
 def _day_capacity(
@@ -662,7 +653,6 @@ def _future_smart_capacity(
 ):
     """Smart capacity available *after today* before normal bathing time."""
     total = 0.0
-    rows = []
     cursor = today + datetime.timedelta(days=1)
     while cursor < candidate_date:
         item = _day_capacity(
@@ -673,7 +663,6 @@ def _future_smart_capacity(
             base_rate=base_rate,
             heating_model=heating_model,
         )
-        rows.append(item)
         total += item["capacity_c"]
         cursor += datetime.timedelta(days=1)
 
@@ -686,7 +675,6 @@ def _future_smart_capacity(
             base_rate=base_rate,
             heating_model=heating_model,
         )
-        rows.append(item)
         total += item["capacity_c"]
     return total
 
@@ -750,7 +738,7 @@ def _candidate_plan(
     floor_c,
     stop_margin,
 ):
-    loss_total, projected_no_heat, _loss_rows = _predicted_loss_path(
+    loss_total, projected_no_heat = _predicted_loss_path(
         water_c=water,
         start_date=today,
         end_date=candidate["date"],

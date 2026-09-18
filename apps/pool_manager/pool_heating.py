@@ -464,6 +464,13 @@ class HeatingModeMixin(PredictiveHeatingSupport):
             )
 
     def pac_besoin_chauffe(self):
+        # Certified water measurement requires circulation even though the PAC
+        # itself may deliberately remain off during the 70% / 15-minute mixing
+        # cycle. Reuse the existing pump-demand path instead of creating a
+        # second hydraulic control loop.
+        if getattr(self, "chauffage_predictif_measurement_active", False):
+            return True
+
         if self.entity_chauffage:
             kind = chauffage_mode_kind(self.chauffage_mode())
             if kind in {"season_start", "turbo"}:

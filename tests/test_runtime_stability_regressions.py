@@ -68,3 +68,78 @@ def test_remote_speed_is_reasserted_before_isaver_watchdog_takes_over():
         datetime.datetime(2026, 9, 17, 9, 0, 31)
     ) is True
     assert calls == [(47, True)]
+
+
+def test_aquagem_keepalive_works_without_local_assist_entity():
+    app = make_app(TAB_MODE[1])
+    app.entity_pompe_local_panel_assist = None
+    app.pompe_remote_keepalive_enabled = True
+    app.derniere_vitesse_commande = 70
+    app.pompe_remote_keepalive_s = 30
+    app.last_changement_vitesse = datetime.datetime(2026, 9, 19, 9, 0, 0)
+    app.arret_force_actif = lambda: False
+    app.pompe_est_on = lambda: True
+    app.start_sequence_is_running = lambda: False
+    app.stop_sequence_is_running = lambda: False
+
+    states = {"input_select.pool_mode": TAB_MODE[1]}
+    app.get_state = lambda entity_id, attribute=None: states.get(entity_id)
+    calls = []
+    app.set_pump_percentage = (
+        lambda percentage, force=False: calls.append((percentage, force)) or percentage
+    )
+
+    assert app._maintain_remote_pump_authority(
+        datetime.datetime(2026, 9, 19, 9, 0, 31)
+    ) is True
+    assert calls == [(70, True)]
+
+
+def test_manual_capable_modes_do_not_receive_remote_keepalive():
+    app = make_app(TAB_MODE[3])
+    app.entity_pompe_local_panel_assist = None
+    app.pompe_remote_keepalive_enabled = True
+    app.derniere_vitesse_commande = 70
+    app.pompe_remote_keepalive_s = 30
+    app.last_changement_vitesse = datetime.datetime(2026, 9, 19, 9, 0, 0)
+    app.arret_force_actif = lambda: False
+    app.pompe_est_on = lambda: True
+    app.start_sequence_is_running = lambda: False
+    app.stop_sequence_is_running = lambda: False
+    app.get_state = lambda entity_id, attribute=None: TAB_MODE[3]
+
+    calls = []
+    app.set_pump_percentage = (
+        lambda percentage, force=False: calls.append((percentage, force)) or percentage
+    )
+
+    assert app._maintain_remote_pump_authority(
+        datetime.datetime(2026, 9, 19, 9, 1, 0)
+    ) is False
+    assert calls == []
+
+
+def test_intelligent_mode_self_heals_local_control_switch_if_reenabled():
+    app = make_app(TAB_MODE[1])
+    app.entity_pompe_local_panel_assist = "switch.local_assist"
+    app.pompe_remote_keepalive_enabled = True
+    app.derniere_vitesse_commande = 70
+    app.pompe_remote_keepalive_s = 30
+    app.last_changement_vitesse = datetime.datetime(2026, 9, 19, 9, 0, 50)
+    app.arret_force_actif = lambda: False
+    app.pompe_est_on = lambda: True
+    app.start_sequence_is_running = lambda: False
+    app.stop_sequence_is_running = lambda: False
+
+    states = {
+        "input_select.pool_mode": TAB_MODE[1],
+        "switch.local_assist": "on",
+    }
+    app.get_state = lambda entity_id, attribute=None: states.get(entity_id)
+    sync_calls = []
+    app.sync_local_panel_policy = lambda mode=None: sync_calls.append(mode)
+
+    assert app._maintain_remote_pump_authority(
+        datetime.datetime(2026, 9, 19, 9, 1, 0)
+    ) is False
+    assert sync_calls == [TAB_MODE[1]]

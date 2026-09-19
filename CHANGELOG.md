@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.3 - Exact certified-measurement pump speed
+
+- Lock the filtration pump to the configured certified-measurement reference speed exactly (70% by default) while predictive temperature stabilization is active.
+- Prevent solar, quota, catch-up, or other normal strategy requests from raising the pump above the measurement reference speed during the short certification cycle.
+- Bypass normal speed ramp/delay rules for this explicit reference cycle so a pump already at 100% drops directly to 70% instead of stepping down slowly.
+- Avoid redundant fan commands when the pump is already at the configured measurement speed.
+- Keep the 47% hydraulic minimum unchanged outside certified measurement cycles.
+- Rename the user-facing measurement state to `🌀 Stabilisation mesure température`.
+
+
 ## 0.7.2 - Predictive WAIT safety and diagnostic cleanup
 
 - Stop the PAC immediately when the adaptive planner returns `WAIT` or another no-heat decision; thermal learning and certification may keep pump circulation only, never unnecessary heat production.

@@ -89,9 +89,9 @@ def test_intelligent_and_safety_modes_disable_local_assist():
 
 def test_temperature_path_only_forces_initial_speed_once():
     source = (MODULE_DIR / "pool_control.py").read_text(encoding="utf-8")
-    assert "elif not self.mode_speed_initialized:" in source
     assert "if not self.mode_speed_initialized:" in source
-    assert "vitesse_appliquee = self.get_fan_percentage()" in source
+    assert "self.mode_speed_initialized = True" in source
+    assert "else:\n                    vitesse_appliquee = self.get_fan_percentage()" in source
 
 
 def test_predictive_measurement_preserves_speed_above_reference():

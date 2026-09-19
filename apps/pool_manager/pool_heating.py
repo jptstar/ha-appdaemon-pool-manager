@@ -244,6 +244,13 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         elif old_kind == "turbo":
             self._cancel_turbo_timer()
 
+            # Leaving a forced Turbo mode must also release the physical PAC
+            # preset immediately. Start from Smart; predictive control may
+            # explicitly select Turbo again a moment later if the new MPC plan
+            # genuinely requires it.
+            if new_kind in {"auto", "end_season", "season_start"}:
+                self._set_pac_preset(self.chauffage_preset_smart)
+
         if self.chauffage_predictif and new_kind in {"auto", "end_season", "season_start"}:
             # Re-evaluate weather immediately after a strategy change.
             self.chauffage_predictif_forecast_at = None

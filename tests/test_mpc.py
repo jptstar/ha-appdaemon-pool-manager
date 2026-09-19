@@ -290,3 +290,174 @@ def test_dashboard_forecast_exposes_exact_mpc_heat_days():
     assert rows[-1]["mpc_heat_hours"] > 0
     assert rows[-1]["mpc_preset"] in {"Smart", "Turbo"}
     assert rows[-1]["predicted_water_end"] is not None
+
+
+def test_weekend_bonus_prefers_marginal_weekend_without_forcing_bad_weather():
+    now = datetime.datetime(2026, 9, 18, 8, 0)  # Friday
+    forecast = _forecast(
+        now,
+        [
+            (24, "sunny", 16),
+            (24, "sunny", 16),
+        ],
+    )
+    for row in forecast:
+        row["usage_temperature"] = 24.0
+        row["usage_score"] = 50.0
+        row["strategic_score"] = 50.0
+
+    opportunities = pool_predictive.find_swim_opportunities(
+        forecast,
+        now,
+        score_min=55.0,
+        min_air_c=21.0,
+        weekend_bonus=10.0,
+    )
+
+    assert [item["date"] for item in opportunities] == [
+        now.date() + datetime.timedelta(days=1)
+    ]
+    assert opportunities[0]["weekend"] is True
+    assert opportunities[0]["eligibility_score"] == 60.0
+
+
+def test_mpc_plans_multiple_bathing_windows_across_full_horizon():
+    now = datetime.datetime(2026, 9, 18, 8, 0)
+    forecast = _forecast(
+        now,
+        [
+            (18, "cloudy", 12),
+            (25, "sunny", 17),
+            (26, "sunny", 18),
+            (16, "rainy", 10),
+            (17, "rainy", 11),
+            (27, "sunny", 18),
+        ],
+    )
+    usage_scores = [20, 72, 75, 15, 20, 74]
+    usage_temps = [18, 25, 26, 16, 17, 27]
+    for row, score, temp in zip(forecast, usage_scores, usage_temps):
+        row["usage_score"] = float(score)
+        row["strategic_score"] = float(score)
+        row["usage_temperature"] = float(temp)
+
+    learned = {
+        "smart": {
+            "15_20": {"rate": 0.16, "count": 30, "power_w": 1200},
+            "20_25": {"rate": 0.45, "count": 30, "power_w": 1100},
+            "ge25": {"rate": 0.70, "count": 30, "power_w": 1000},
+        },
+        "turbo": {
+            "15_20": {"rate": 0.28, "count": 30, "power_w": 1900},
+            "20_25": {"rate": 0.60, "count": 30, "power_w": 1800},
+            "ge25": {"rate": 0.90, "count": 30, "power_w": 1700},
+        },
+    }
+
+    plan = _plan(
+        now,
+        forecast,
+        water_c=30.0,
+        target_c=30.0,
+        heating_rate_model=learned,
+        loss_fallback_delta10_c_per_h=0.03,
+    )
+
+    expected_swims = [
+        now.date() + datetime.timedelta(days=1),
+        now.date() + datetime.timedelta(days=2),
+        now.date() + datetime.timedelta(days=5),
+    ]
+    assert plan["swim_dates"] == expected_swims
+    assert len(plan["mpc_plan"]) == len(forecast)
+    assert [item["date"] for item in plan["mpc_plan"] if item["swim"]] == expected_swims
+    assert plan["mpc_horizon_energy_kwh"] == plan["mpc_energy_kwh"]
+    assert all("recoverability_floor" in item for item in plan["mpc_plan"])
+
+
+def test_mpc_can_coast_through_bad_days_then_reheat_for_later_swim():
+    now = datetime.datetime(2026, 9, 18, 8, 0)
+    forecast = _forecast(
+        now,
+        [
+            (25, "sunny", 17),
+            (26, "sunny", 18),
+            (15, "rainy", 8),
+            (15, "rainy", 8),
+            (28, "sunny", 19),
+        ],
+    )
+    usage_scores = [70, 74, 10, 10, 78]
+    usage_temps = [25, 26, 15, 15, 28]
+    for row, score, temp in zip(forecast, usage_scores, usage_temps):
+        row["usage_score"] = float(score)
+        row["strategic_score"] = float(score)
+        row["usage_temperature"] = float(temp)
+
+    learned = {
+        "smart": {
+            "10_15": {"rate": 0.10, "count": 30, "power_w": 1250},
+            "15_20": {"rate": 0.15, "count": 30, "power_w": 1200},
+            "20_25": {"rate": 0.45, "count": 30, "power_w": 1050},
+            "ge25": {"rate": 0.75, "count": 30, "power_w": 950},
+        },
+        "turbo": {
+            "10_15": {"rate": 0.18, "count": 30, "power_w": 1950},
+            "15_20": {"rate": 0.25, "count": 30, "power_w": 1900},
+            "20_25": {"rate": 0.60, "count": 30, "power_w": 1800},
+            "ge25": {"rate": 0.95, "count": 30, "power_w": 1700},
+        },
+    }
+
+    plan = _plan(
+        now,
+        forecast,
+        water_c=30.0,
+        target_c=30.0,
+        heating_rate_model=learned,
+        loss_fallback_delta10_c_per_h=0.025,
+        day_hours=8.0,
+        candidate_day_hours=6.0,
+    )
+    path = plan["mpc_plan"]
+
+    assert path[2]["swim"] is False
+    assert path[3]["swim"] is False
+    assert path[2]["target_date"] == now.date() + datetime.timedelta(days=4)
+    assert path[3]["target_date"] == now.date() + datetime.timedelta(days=4)
+    assert path[4]["swim"] is True
+    assert path[4]["day_end_temperature"] >= 29.8
+    assert min(path[2]["end_temperature"], path[3]["end_temperature"]) < 30.0
+
+
+def test_dashboard_forecast_exposes_multi_horizon_actions_and_targets():
+    now = datetime.datetime(2026, 9, 18, 8, 0)
+    forecast = _forecast(
+        now,
+        [
+            (24, "sunny", 16),
+            (15, "rainy", 8),
+            (26, "sunny", 18),
+        ],
+    )
+    for row, score, temp in zip(forecast, [70, 10, 75], [24, 15, 26]):
+        row["usage_score"] = float(score)
+        row["strategic_score"] = float(score)
+        row["usage_temperature"] = float(temp)
+
+    plan = _plan(
+        now,
+        forecast,
+        water_c=30.0,
+        target_c=30.0,
+        loss_fallback_delta10_c_per_h=0.02,
+    )
+    rows = pool_predictive.dashboard_forecast(forecast, plan, now)
+
+    assert rows[0]["swim"] is True
+    assert rows[2]["swim"] is True
+    assert rows[1]["mpc_target_date"] == (
+        now.date() + datetime.timedelta(days=2)
+    ).isoformat()
+    assert rows[1]["recoverability_floor"] is not None
+    assert rows[0]["primary_swim"] is True

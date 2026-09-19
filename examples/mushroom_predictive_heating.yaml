@@ -15,13 +15,21 @@ secondary: >-
   {% set estimated = state_attr(e, 'water_temperature_estimated') %}
   {% set certified = state_attr(e, 'certified_water_temperature') %}
   {% set trajectory = state_attr(e, 'trajectory_target_temperature') %}
+  {% set adaptive_floor = state_attr(e, 'adaptive_floor_temperature') %}
+  {% set mpc_energy = state_attr(e, 'mpc_energy_kwh') %}
   {% set target = state_attr(e, 'target_temperature') %}
   {% set night = state_attr(e, 'night_heating') %}
   {% if estimated is not none %}
   🌡️ Eau ~{{ estimated }}°{% if certified is not none %} · mesurée {{ certified }}°{% endif %}
   {% endif %}
+  {% if adaptive_floor is not none %}
+   · réserve {{ adaptive_floor }}°
+  {% endif %}
   {% if trajectory is not none %}
    · trajectoire {{ trajectory }}°
+  {% endif %}
+  {% if mpc_energy is not none and mpc_energy | float(0) > 0 %}
+   · MPC ~{{ mpc_energy }} kWh
   {% endif %}
   {% if swim %}
    · 🏊 {{ swim }}{% if start %} · reprise {{ start }}{% endif %}

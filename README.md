@@ -268,6 +268,35 @@ If `entity_chauffage_predictif_status` is configured, useful attributes now incl
 - `learned_night_losses`
 - `forecast`
 
+## Aquagem / iSaver local-control handover
+
+Aquagem Pump 0.4.2+ can intentionally return authority to the physical panel after a protected bus-silence window. That is useful in manual-capable pool modes, but an automatic Pool Manager mode must not release authority or the pump can jump back to the panel's remembered speed (for example Max / 2900 rpm).
+
+Pool Manager v0.8.1 therefore enforces this policy:
+
+```text
+Intelligent   -> remote Pool Manager authority
+Hors Gel      -> remote Pool Manager authority
+Température   -> local-panel handover allowed
+Marche Forcée -> local-panel handover allowed
+Arrêt Forcé   -> remote/safety authority
+```
+
+When the Aquagem `Retour au contrôle local` switch is configured with `entity_pompe_local_panel_assist`, Pool Manager disables it automatically in Intelligent/Hors Gel and self-heals it if it is turned back on. In addition, v0.8.1 sends a short remote keepalive before the iSaver watchdog can hand control back. This keepalive works even when the switch entity was omitted for known Aquagem/iSaver fan entity ids.
+
+Recommended configuration:
+
+```yaml
+entity_pompe_local_panel_assist: switch.pool_pump_return_to_local_control
+entity_pompe_local_control_available: binary_sensor.pool_pump_local_control_available
+entity_pompe_local_control_remaining: sensor.pool_pump_time_until_local_control
+
+pompe_remote_keepalive: true
+pompe_remote_keepalive_s: 30
+```
+
+For non-Aquagem fan integrations, the keepalive is disabled unless explicitly enabled. The automatic keepalive never runs in Température or Marche Forcée, so intentional manual/local speed control remains possible.
+
 ## Heating override boundary
 
 Pool Manager can consume an optional Home Assistant heating-override policy signal:

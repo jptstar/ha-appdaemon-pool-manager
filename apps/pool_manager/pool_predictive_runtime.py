@@ -889,7 +889,11 @@ class PredictiveHeatingSupport:
         if not self.chauffage_predictif_measurement_active:
             return False
 
-        if self.chauffage_predictif_measurement_requested_at is None:
+        if getattr(
+            self,
+            "chauffage_predictif_measurement_requested_at",
+            None,
+        ) is None:
             self.chauffage_predictif_measurement_requested_at = now
 
         # Before the reference speed has ever been observed, keep requesting the
@@ -903,6 +907,18 @@ class PredictiveHeatingSupport:
                     now,
                     "vitesse de calibration impossible à commander",
                 )
+
+            # Some integrations update the fan state synchronously, others on
+            # the next polling cycle. Re-read once so a confirmed 70% can start
+            # the clock immediately without assuming the command succeeded.
+            try:
+                confirmed_speed = self.get_fan_percentage()
+            except Exception:
+                confirmed_speed = None
+            if confirmed_speed is not None and confirmed_speed >= minimum:
+                speed = confirmed_speed
+                if self.chauffage_predictif_measurement_started_at is None:
+                    self.chauffage_predictif_measurement_started_at = now
 
             if self.chauffage_predictif_measurement_started_at is None:
                 try:

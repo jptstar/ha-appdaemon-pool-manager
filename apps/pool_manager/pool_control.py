@@ -118,29 +118,6 @@ class ControlMixin:
                     return
 
             if h_debut <= h_maintenant <= h_fin:
-                if (not self.stabilisation_active) and (not self.stabilisation_deja_faite):
-                    stabilisation_max = timedelta(hours=1)
-                    temps_restant = h_fin - h_maintenant
-                    duree_stab = min(stabilisation_max, temps_restant)
-
-                    if duree_stab.total_seconds() > 0:
-                        if not self.pompe_est_on():
-                            self.start_pump_with_delayed_speed(self.vitesse_mode_temperature, delay_s=2, context="stabilisation_temperature")
-                        elif not self.mode_speed_initialized:
-                            self.set_pump_percentage(self.vitesse_mode_temperature, force=True)
-                            self.mode_speed_initialized = True
-
-                        self.stabilisation_active = True
-                        self.fin_stabilisation = now_dt + duree_stab
-
-                        debit = self.debit_pompe(self.vitesse_mode_temperature)
-                        self.set_messages(
-                            f"Stabilisation | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
-                            f"{int(self.vitesse_mode_temperature)}% | {debit:.1f}m3/h | fin {self.fin_stabilisation.strftime('%H:%M')} | {texte_plage} | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
-                        )
-                        self.format_texte_solaire_debug(self.vitesse_mode_temperature)
-                        return
-
                 if not self.pompe_est_on():
                     self.start_pump_with_delayed_speed(self.vitesse_mode_temperature, delay_s=2, context="temperature")
                     self.set_messages(
@@ -159,6 +136,23 @@ class ControlMixin:
                         vitesse_appliquee = self.derniere_vitesse_commande if self.derniere_vitesse_commande is not None else self.vitesse_mode_temperature
 
                 debit = self.debit_pompe(vitesse_appliquee)
+
+                # La seule stabilisation utile est le délai hydraulique normal
+                # après un vrai redémarrage de pompe. Elle ne prolonge jamais
+                # artificiellement la filtration et ne modifie pas la vitesse.
+                if not self.fin_tempo:
+                    try:
+                        tempo_eau = max(0, int(float(self.get_state(self.args["tempo_eau"]))))
+                    except Exception:
+                        tempo_eau = 0
+                    restant = max(0, int(tempo_eau - self.temps_depuis_on()))
+                    self.set_messages(
+                        f"Stabilisation température | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
+                        f"{vitesse_appliquee}% | encore {restant}s | {texte_plage} | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
+                    )
+                    self.format_texte_solaire_debug(vitesse_appliquee)
+                    return
+
                 self.set_messages(
                     f"Température | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
                     f"{vitesse_appliquee}% | {debit:.1f}m3/h | {texte_plage} | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"

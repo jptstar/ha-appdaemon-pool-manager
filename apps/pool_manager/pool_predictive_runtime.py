@@ -1214,11 +1214,7 @@ class PredictiveHeatingSupport:
             ),
             "measurement_purpose": self.chauffage_predictif_measurement_purpose,
             "measurement_reference_speed_pct": None,
-            "measurement_reference_seconds": (
-                self._safe_int_state(self.args.get("tempo_eau"), 0)
-                if hasattr(self, "_safe_int_state")
-                else 0
-            ),
+            "measurement_reference_seconds": None,
             "target_temperature": (
                 round(float(target), 1) if target is not None else None
             ),

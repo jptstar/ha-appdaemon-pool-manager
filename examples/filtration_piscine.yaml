@@ -91,6 +91,10 @@ pool_manager:
   # No Home Assistant helper is required; choose a unique sensor entity id.
   entity_chauffage_predictif_status: sensor.pool_predictive_heating
 
+  # Virtual score sensor published by AppDaemon. Its state is the usage score
+  # of the currently selected bathing opportunity; no HA helper is required.
+  entity_chauffage_predictif_score: sensor.piscine_score_baignade
+
   # Weather outlook. Up to 15 days remain visible; heating only starts when the
   # learned thermal model says recovery really needs to begin.
   chauffage_predictif_horizon_jours: 15

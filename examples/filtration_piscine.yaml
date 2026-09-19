@@ -113,11 +113,9 @@ pool_manager:
   chauffage_predictif_apprentissage_alpha: 0.25
 
   # Certified water measurement used by learning and important heat decisions.
-  # 47% remains the normal hydraulic low limit, but the thermal model only
-  # certifies the pool temperature after 15 minutes at 70%, followed by a short
-  # stability check. Lower-speed pipe readings never train the model.
-  chauffage_predictif_mesure_vitesse_pct: 70
-  chauffage_predictif_mesure_tempo_s: 900
+  # Stabilization is shared with the normal pump-start delay (tempo_eau).
+  # Predictive sampling never starts an autonomous circulation cycle and never
+  # overrides pump speed merely to obtain a temperature.
   chauffage_predictif_mesure_stabilite_s: 120
   chauffage_predictif_mesure_variation_max_c: 0.15
   chauffage_predictif_mesure_fraiche_s: 21600

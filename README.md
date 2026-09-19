@@ -163,7 +163,9 @@ chauffage_predictif_mesure_vitesse_pct: 70
 
 A pipe sensor is not treated as the pool merely because the pump has just started. Pool Manager now uses the same hydraulic stabilization already used by normal filtration: after a meaningful stop, the probe is ignored until `tempo_eau` has elapsed. Short pump interruptions do not re-arm a full stabilization cycle.
 
-Certified calibration uses `chauffage_predictif_mesure_vitesse_pct` (**70% by default**) as a temporary minimum. If the automatic strategy is already running the pump at 70% or more, Pool Manager leaves that speed unchanged. If it is below 70%, Pool Manager raises it to 70% only for the calibration. When calibration finishes, speed authority is immediately returned to the normal automatic strategy. `mem_temp` remains the operational fallback while the pump is stopped and is never accepted as a new learning sample.
+Certified calibration uses `chauffage_predictif_mesure_vitesse_pct` (**70% by default**) as a temporary minimum. If the automatic strategy is already running the pump at 70% or more, Pool Manager leaves that speed unchanged. If it is below 70%, Pool Manager raises it to 70% only for the calibration. Once the reference speed has been confirmed, the `tempo_eau` clock is monotonic: a later transient speed-report dip does not restart the full delay. When calibration finishes, speed authority is immediately returned to the normal automatic strategy. `mem_temp` remains the operational fallback while the pump is stopped and is never accepted as a new learning sample.
+
+Calibration is bounded in v0.8.3. By default the pump has 300 s to confirm the reference speed, and a stuck `fin_tempo` gate or unavailable physical probe is released after `tempo_eau + 300 s`. After such a failure, Pool Manager continues from its best available temperature estimate and waits 900 s before retrying certification. The optional settings are `chauffage_predictif_mesure_timeout_grace_s` and `chauffage_predictif_mesure_retry_s`.
 
 If predictive heating genuinely needs to start while the pump is off, circulation may be started because heating itself requires flow. The controller then waits for the normal `tempo_eau` stabilization before using the physical probe for the final heating decision.
 
@@ -268,7 +270,11 @@ If `entity_chauffage_predictif_status` is configured, useful attributes now incl
 - `certified_water_temperature`
 - `certified_water_at`
 - `measurement_active`
-- `measurement_reference_speed_pct` (70% by default; validity threshold only)
+- `measurement_reference_speed_pct` (70% by default; temporary calibration minimum)
+- `measurement_requested_at`
+- `measurement_elapsed_seconds`
+- `measurement_remaining_seconds`
+- `measurement_phase` (`raising_flow` / `stabilizing`)
 - `current_cover`
 - `next_swim_date`
 - `next_swim_usage_score`

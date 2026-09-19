@@ -218,6 +218,12 @@ class LifecycleMixin:
         if self.entity_volet_piscine:
             self.listen_state(self.change_electrolyseur_context, self.entity_volet_piscine)
 
+        if self.entity_pompe_local_panel_assist:
+            self.listen_state(
+                self.change_local_panel_assist,
+                self.entity_pompe_local_panel_assist,
+            )
+
         if self.entity_consigne_electrolyseur:
             self.listen_state(self.change_electrolyseur_context, self.args["cde_pompe"])
             self.listen_state(self.change_electrolyseur_context, self.args["fan_variateur_pompe"])
@@ -292,6 +298,19 @@ class LifecycleMixin:
 
     def change_mode_calcul(self, entity, attribute, old, new, kwargs):
         self.traitement(kwargs)
+
+    def change_local_panel_assist(self, entity, attribute, old, new, kwargs):
+        """Keep Aquagem local handover disabled in automatic/safety modes."""
+        try:
+            mode = (
+                self.get_state(self.args["mode_de_fonctionnement"]) or ""
+            ).strip()
+        except Exception:
+            return
+
+        if mode in [TAB_MODE[1], TAB_MODE[2]] or self.arret_force_actif():
+            if str(new).strip().lower() != "off":
+                self.sync_local_panel_policy(mode)
 
     def hors_gel_settings_changed(self, entity, attribute, old, new, kwargs):
         mode = self.get_state(self.args["mode_de_fonctionnement"]).strip()

@@ -159,6 +159,9 @@ def test_mpc_adaptive_floor_can_be_higher_than_absolute_floor():
     assert plan["candidate"] is not None
     assert plan["adaptive_floor_c"] > 22.0
     assert plan["trajectory_target_c"] >= plan["adaptive_floor_c"]
+    assert plan["thermal_margin_c"] == round(
+        28.0 - plan["adaptive_floor_c"], 2
+    )
 
 
 def test_mpc_uses_night_only_when_daytime_plan_is_not_feasible():

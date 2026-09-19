@@ -399,6 +399,7 @@ class PredictiveHeatingSupport:
         self.chauffage_predictif_certified_at = None
         self.chauffage_predictif_measurement_active = False
         self.chauffage_predictif_measurement_purpose = None
+        self.chauffage_predictif_measurement_previous_speed = None
         self.chauffage_predictif_measurement_started_at = None
         self.chauffage_predictif_measurement_stable_at = None
         self.chauffage_predictif_measurement_stable_temp = None
@@ -657,15 +658,25 @@ class PredictiveHeatingSupport:
         self.chauffage_predictif_measurement_stable_at = None
         self.chauffage_predictif_measurement_stable_temp = None
         if not keep_request:
+            was_active = bool(self.chauffage_predictif_measurement_active)
             self.chauffage_predictif_measurement_active = False
             self.chauffage_predictif_measurement_purpose = None
+            self.chauffage_predictif_measurement_previous_speed = None
+
+            # Calibration only owns a temporary minimum speed. Once finished,
+            # immediately hand control back to the normal automatic strategy.
+            if was_active:
+                try:
+                    self.traitement({})
+                except Exception:
+                    pass
 
     def _request_predictive_measurement(self, purpose, start_pump=False):
-        """Use an already justified circulation cycle for temperature sampling.
+        """Start a short certified calibration on an already justified pump run.
 
-        A predictive measurement must never start the pump by itself and must
-        never alter pump speed. Hydraulic stabilization belongs to the normal
-        pump-start path (tempo_eau).
+        The calibration requires at least the configured reference speed
+        (70% by default). If the pump already runs faster, its current speed is
+        preserved. If it runs slower, it is temporarily raised to the minimum.
         """
         if not self.chauffage_predictif:
             return False
@@ -673,22 +684,24 @@ class PredictiveHeatingSupport:
             return False
         if not self.pompe_est_on():
             return False
-        if not bool(getattr(self, "fin_tempo", 0)):
-            return False
 
         speed = self.get_fan_percentage()
-        if (
-            speed is None
-            or speed < self.chauffage_predictif_mesure_vitesse_pct
-        ):
-            # 70% by default is a validity threshold only. Never change pump
-            # speed merely to obtain a predictive temperature sample.
+        if speed is None:
             return False
 
         if not self.chauffage_predictif_measurement_active:
             self.chauffage_predictif_measurement_active = True
             self.chauffage_predictif_measurement_purpose = str(purpose)
+            self.chauffage_predictif_measurement_previous_speed = int(speed)
             self._reset_measurement_tracker(keep_request=True)
+
+        minimum = self.chauffage_predictif_mesure_vitesse_pct
+        if speed < minimum:
+            try:
+                self.set_pump_percentage(minimum, force=True)
+            except Exception:
+                return False
+
         return True
 
     def _register_certified_measurement(self, now, water):
@@ -748,16 +761,20 @@ class PredictiveHeatingSupport:
             return False
 
         speed = self.get_fan_percentage()
-        if (
-            speed is None
-            or speed < self.chauffage_predictif_mesure_vitesse_pct
-        ):
-            # Hydraulic stabilization may be complete, but a low-speed pipe
-            # reading is not representative enough to train/drive MPC. Do not
-            # keep displaying an endless "stabilisation" state: simply wait for
-            # a later normal circulation at or above the reference threshold.
+        if speed is None:
             self._reset_measurement_tracker()
             return False
+
+        minimum = self.chauffage_predictif_mesure_vitesse_pct
+        if speed < minimum:
+            # Calibration owns only the minimum required speed. It never reduces
+            # a higher automatic speed.
+            try:
+                self.set_pump_percentage(minimum, force=True)
+                speed = minimum
+            except Exception:
+                self._reset_measurement_tracker()
+                return False
 
         last_start = getattr(self, "last_pompe_on", None)
         certified_at = self.chauffage_predictif_certified_at

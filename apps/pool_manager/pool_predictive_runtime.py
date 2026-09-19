@@ -7,6 +7,7 @@ import datetime
 import json
 import os
 
+from pool_mpc import build_mpc_plan
 from pool_predictive import (
     build_predictive_plan,
     dashboard_forecast,
@@ -195,6 +196,65 @@ class PredictiveHeatingSupport:
         self.chauffage_predictif_apprentissage = self._bool_value(
             self.args.get("chauffage_predictif_apprentissage", "true"),
             default=True,
+        )
+
+        # v0.8 adaptive thermal model + receding-horizon MPC.  The existing
+        # deterministic planner remains available as an explicit fallback.
+        self.chauffage_predictif_mpc = self._bool_value(
+            self.args.get("chauffage_predictif_mpc", "true"),
+            default=True,
+        )
+        self.chauffage_predictif_mpc_pas_h = max(
+            0.5,
+            min(3.0, float(self.args.get("chauffage_predictif_mpc_pas_h", 1.0))),
+        )
+        self.chauffage_predictif_mpc_pas_temperature_c = max(
+            0.1,
+            min(
+                0.5,
+                float(
+                    self.args.get(
+                        "chauffage_predictif_mpc_pas_temperature_c",
+                        0.2,
+                    )
+                ),
+            ),
+        )
+        self.chauffage_predictif_mpc_puissance_smart_w = max(
+            100.0,
+            float(
+                self.args.get(
+                    "chauffage_predictif_mpc_puissance_smart_w",
+                    self.args.get("seuil_pac_smart_w", 1200),
+                )
+            ),
+        )
+        self.chauffage_predictif_mpc_puissance_turbo_w = max(
+            self.chauffage_predictif_mpc_puissance_smart_w,
+            float(
+                self.args.get(
+                    "chauffage_predictif_mpc_puissance_turbo_w",
+                    self.args.get("seuil_pac_turbo_w", 1900),
+                )
+            ),
+        )
+        self.chauffage_predictif_mpc_penalite_turbo_kwh_h = max(
+            0.0,
+            float(
+                self.args.get(
+                    "chauffage_predictif_mpc_penalite_turbo_kwh_h",
+                    0.08,
+                )
+            ),
+        )
+        self.chauffage_predictif_mpc_penalite_nuit_kwh_h = max(
+            0.0,
+            float(
+                self.args.get(
+                    "chauffage_predictif_mpc_penalite_nuit_kwh_h",
+                    0.35,
+                )
+            ),
         )
         self.chauffage_predictif_apprentissage_min_s = max(
             900,
@@ -1079,7 +1139,7 @@ class PredictiveHeatingSupport:
     def _build_runtime_predictive_plan(self, kind, water, target, forecast):
         day_hours = self._predictive_daylight_hours()
         remaining = self._predictive_daylight_hours_remaining()
-        return build_predictive_plan(
+        common = dict(
             now=datetime.datetime.now(),
             water_c=water,
             target_c=target,
@@ -1105,6 +1165,25 @@ class PredictiveHeatingSupport:
             ),
             daylight_active=self._predictive_daylight_active(),
         )
+        if self.chauffage_predictif_mpc:
+            return build_mpc_plan(
+                **common,
+                smart_power_fallback_w=(
+                    self.chauffage_predictif_mpc_puissance_smart_w
+                ),
+                turbo_power_fallback_w=(
+                    self.chauffage_predictif_mpc_puissance_turbo_w
+                ),
+                step_h=self.chauffage_predictif_mpc_pas_h,
+                state_step_c=self.chauffage_predictif_mpc_pas_temperature_c,
+                turbo_penalty_kwh_per_h=(
+                    self.chauffage_predictif_mpc_penalite_turbo_kwh_h
+                ),
+                night_penalty_kwh_per_h=(
+                    self.chauffage_predictif_mpc_penalite_nuit_kwh_h
+                ),
+            )
+        return build_predictive_plan(**common)
 
     @staticmethod
     def _iso_date(value):
@@ -1178,7 +1257,14 @@ class PredictiveHeatingSupport:
             "target_temperature": (
                 round(float(target), 1) if target is not None else None
             ),
+            "planner": (plan or {}).get(
+                "planner",
+                "MPC" if self.chauffage_predictif_mpc else "trajectory",
+            ),
+            "adaptive_model": bool((plan or {}).get("adaptive_model")),
+            "model_confidence": (plan or {}).get("model_confidence"),
             "floor_temperature": (plan or {}).get("floor_c"),
+            "adaptive_floor_temperature": (plan or {}).get("adaptive_floor_c"),
             "trajectory_target_temperature": (plan or {}).get(
                 "trajectory_target_c"
             ),
@@ -1206,6 +1292,20 @@ class PredictiveHeatingSupport:
                 "future_smart_capacity_c"
             ),
             "thermal_margin_c": (plan or {}).get("thermal_margin_c"),
+            "mpc_energy_kwh": (plan or {}).get("mpc_energy_kwh"),
+            "mpc_night_energy_required": bool(
+                (plan or {}).get("mpc_night_energy_required")
+            ),
+            "mpc_plan": [
+                {
+                    **item,
+                    "date": self._iso_date(item.get("date"))
+                    if isinstance(item, dict)
+                    else None,
+                }
+                for item in ((plan or {}).get("mpc_plan") or [])
+                if isinstance(item, dict)
+            ],
             "forecast_horizon_days": self.chauffage_predictif_horizon_jours,
             "forecast": rows,
             "learned_heating_rates": self.chauffage_predictif_rate_model,
@@ -1227,7 +1327,10 @@ class PredictiveHeatingSupport:
             attributes.get("heating_now"),
             attributes.get("recommended_preset"),
             attributes.get("next_swim_date"),
+            attributes.get("planner"),
+            attributes.get("adaptive_floor_temperature"),
             attributes.get("trajectory_target_temperature"),
+            attributes.get("mpc_energy_kwh"),
             attributes.get("reason"),
             attributes.get("forecast_updated_at"),
         )

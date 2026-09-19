@@ -148,11 +148,9 @@ chauffage_predictif_mpc_pas_temperature_c: 0.2
 chauffage_predictif_mpc_puissance_smart_w: 1200
 chauffage_predictif_mpc_puissance_turbo_w: 1900
 
-# Certified pool-water measurement.
-chauffage_predictif_mesure_vitesse_pct: 70
-chauffage_predictif_mesure_tempo_s: 900
-chauffage_predictif_mesure_stabilite_s: 120
-chauffage_predictif_mesure_variation_max_c: 0.15
+# Pool-water stabilization is shared with normal filtration:
+# tempo_eau is the only delay before the pipe probe is trusted after a
+# meaningful pump stop. Predictive sampling never owns pump speed.
 
 # Optional absolute recoverability floor:
 # chauffage_predictif_temperature_min_eau_c: 22
@@ -160,11 +158,11 @@ chauffage_predictif_mesure_variation_max_c: 0.15
 
 ### Certified water temperature
 
-A pipe sensor is not treated as the pool merely because water is moving. **47% remains the normal hydraulic low limit**, but the thermal model only certifies a pool-water temperature after the pump has run continuously at the configured reference speed — **70% for 15 minutes by default** — followed by a short stability check.
+A pipe sensor is not treated as the pool merely because the pump has just started. Pool Manager now uses the same hydraulic stabilization already used by normal filtration: after a meaningful stop, the probe is ignored until `tempo_eau` has elapsed. Short pump interruptions do not re-arm a full stabilization cycle.
 
-Lower-speed values can still be used by normal filtration control, but they never train the thermal model. `mem_temp` also remains useful as an operational fallback while the pump is stopped, but it is never accepted as a new learning sample.
+Predictive sampling is passive. It never starts an autonomous pump cycle and never overrides pump speed just to obtain a temperature. Once normal circulation has stabilized, the physical water probe can be certified and used by the thermal model. `mem_temp` remains the operational fallback while the pump is stopped and is never accepted as a new learning sample.
 
-Pool Manager does not start a measurement cycle merely because the weather forecast exists. If normal filtration is already running and a selected bathing opportunity is near, it temporarily holds the pump at the certification speed. If the controller is about to make a real heating decision from stale data, it first performs the certified mixing cycle, then decides.
+If predictive heating genuinely needs to start while the pump is off, circulation may be started because heating itself requires flow. The controller then waits for the normal `tempo_eau` stabilization before using the physical probe for the final heating decision.
 
 ### What it learns
 

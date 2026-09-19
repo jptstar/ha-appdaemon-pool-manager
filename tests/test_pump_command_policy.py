@@ -92,3 +92,40 @@ def test_temperature_path_only_forces_initial_speed_once():
     assert "elif not self.mode_speed_initialized:" in source
     assert "if not self.mode_speed_initialized:" in source
     assert "vitesse_appliquee = self.get_fan_percentage()" in source
+
+
+def test_predictive_measurement_locks_speed_to_exact_reference_from_above():
+    devices = FakeDevices(current=100, last_command=100, mode=TAB_MODE[1])
+    devices.chauffage_predictif_measurement_active = True
+    devices.chauffage_predictif_mesure_vitesse_pct = 70
+
+    result = devices.set_pump_percentage(100)
+
+    assert result == 70
+    assert devices.calls == [
+        ("fan/set_percentage", {"entity_id": "fan.pool", "percentage": 70})
+    ]
+
+
+def test_predictive_measurement_locks_speed_to_exact_reference_from_below():
+    devices = FakeDevices(current=50, last_command=50, mode=TAB_MODE[1])
+    devices.chauffage_predictif_measurement_active = True
+    devices.chauffage_predictif_mesure_vitesse_pct = 70
+
+    result = devices.set_pump_percentage(47)
+
+    assert result == 70
+    assert devices.calls == [
+        ("fan/set_percentage", {"entity_id": "fan.pool", "percentage": 70})
+    ]
+
+
+def test_predictive_measurement_does_not_rewrite_when_already_at_reference():
+    devices = FakeDevices(current=70, last_command=70, mode=TAB_MODE[1])
+    devices.chauffage_predictif_measurement_active = True
+    devices.chauffage_predictif_mesure_vitesse_pct = 70
+
+    result = devices.set_pump_percentage(100)
+
+    assert result == 70
+    assert devices.calls == []

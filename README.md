@@ -150,8 +150,8 @@ chauffage_predictif_mpc_puissance_turbo_w: 1900
 
 # Pool-water stabilization is shared with normal filtration:
 # tempo_eau is the delay after a meaningful pump stop.
-# 70% is the minimum speed for a certified physical temperature sample,
-# but predictive sampling never commands that speed.
+# 70% is the temporary minimum during a certified temperature calibration.
+# Higher current speeds are preserved; lower speeds are raised only for calibration.
 chauffage_predictif_mesure_vitesse_pct: 70
 
 # Optional absolute recoverability floor:
@@ -162,7 +162,7 @@ chauffage_predictif_mesure_vitesse_pct: 70
 
 A pipe sensor is not treated as the pool merely because the pump has just started. Pool Manager now uses the same hydraulic stabilization already used by normal filtration: after a meaningful stop, the probe is ignored until `tempo_eau` has elapsed. Short pump interruptions do not re-arm a full stabilization cycle.
 
-Predictive sampling is passive. It never starts an autonomous pump cycle and never overrides pump speed just to obtain a temperature. Once normal circulation has stabilized, the physical water probe is certifiable only when the real pump speed is at least `chauffage_predictif_mesure_vitesse_pct` (**70% by default**). At 47–69%, the reading can still serve normal filtration logic, but it is not accepted as a certified MPC/learning sample. `mem_temp` remains the operational fallback while the pump is stopped and is never accepted as a new learning sample.
+Certified calibration uses `chauffage_predictif_mesure_vitesse_pct` (**70% by default**) as a temporary minimum. If the automatic strategy is already running the pump at 70% or more, Pool Manager leaves that speed unchanged. If it is below 70%, Pool Manager raises it to 70% only for the calibration. When calibration finishes, speed authority is immediately returned to the normal automatic strategy. `mem_temp` remains the operational fallback while the pump is stopped and is never accepted as a new learning sample.
 
 If predictive heating genuinely needs to start while the pump is off, circulation may be started because heating itself requires flow. The controller then waits for the normal `tempo_eau` stabilization before using the physical probe for the final heating decision.
 

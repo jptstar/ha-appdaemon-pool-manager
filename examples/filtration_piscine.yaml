@@ -120,10 +120,16 @@ pool_manager:
 
   # Certified water measurement used by learning and important heat decisions.
   # Stabilization is shared with the normal pump-start delay (tempo_eau).
-  # The physical pipe reading is certifiable only at/above this speed. This is
-  # a validity threshold, never a command: MPC does not force the pump to 70%.
+  # 70% is a temporary calibration minimum: lower speeds are raised only for
+  # the measurement, while an already-higher automatic speed is preserved.
+  # Once 70% has been confirmed, later telemetry dips do not restart the timer.
   chauffage_predictif_mesure_vitesse_pct: 70
   chauffage_predictif_mesure_fraiche_s: 21600
+
+  # v0.8.3 fail-safe: never leave a calibration active forever. Defaults shown:
+  # 5 min grace to establish/finish the measurement, 15 min before retry.
+  chauffage_predictif_mesure_timeout_grace_s: 300
+  chauffage_predictif_mesure_retry_s: 900
 
   # During a long PAC run, request another certified sample every 2 hours so
   # Smart/Turbo gain and electrical power continue to learn automatically.

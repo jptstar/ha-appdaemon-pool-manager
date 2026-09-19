@@ -73,7 +73,7 @@ class FiltrationPiscine(
         entry = {
             "timestamp": now.isoformat(timespec="seconds"),
             "category": category,
-            "message": text,
+            "message": text[:500],
         }
         if not history or history[-1] != entry:
             history.append(entry)
@@ -81,8 +81,8 @@ class FiltrationPiscine(
         self._pool_manager_log_history = history
 
         state = f"{now.strftime('%H:%M:%S')} • {category} • {text}"
-        if len(state) > 250:
-            state = state[:247] + "..."
+        if len(state) > 180:
+            state = state[:177] + "..."
 
         self.set_state(
             entity,

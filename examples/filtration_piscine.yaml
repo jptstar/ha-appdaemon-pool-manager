@@ -3,6 +3,8 @@ pool_manager:
   class: FiltrationPiscine
 
   # Main sensors
+  # Virtual AppDaemon log sensor; no HA helper needs to be created.
+  entity_pool_manager_log: sensor.pool_manager_log
   temperature_eau: sensor.pool_water_temperature
   restitution_inst: sensor.grid_power
 
@@ -114,8 +116,9 @@ pool_manager:
 
   # Certified water measurement used by learning and important heat decisions.
   # Stabilization is shared with the normal pump-start delay (tempo_eau).
-  # Predictive sampling never starts an autonomous circulation cycle and never
-  # overrides pump speed merely to obtain a temperature.
+  # The physical pipe reading is certifiable only at/above this speed. This is
+  # a validity threshold, never a command: MPC does not force the pump to 70%.
+  chauffage_predictif_mesure_vitesse_pct: 70
   chauffage_predictif_mesure_fraiche_s: 21600
 
   # During a long PAC run, request another certified sample every 2 hours so

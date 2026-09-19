@@ -252,3 +252,38 @@ def test_no_swim_window_keeps_existing_floor_policy_under_mpc():
     assert plan["action"] == "WAIT"
     assert plan["should_heat"] is False
     assert plan["adaptive_floor_c"] == 22.0
+
+
+def test_dashboard_forecast_exposes_exact_mpc_heat_days():
+    now = datetime.datetime(2026, 9, 18, 8, 0)
+    forecast = _forecast(
+        now,
+        [
+            (16, "cloudy", 10),
+            (18, "cloudy", 11),
+            (26, "sunny", 18),
+        ],
+    )
+    learned = {
+        "smart": {
+            "15_20": {"rate": 0.18, "count": 30, "power_w": 1200},
+            "ge25": {"rate": 0.65, "count": 30, "power_w": 1200},
+        },
+        "turbo": {
+            "15_20": {"rate": 0.28, "count": 30, "power_w": 1900},
+            "ge25": {"rate": 0.80, "count": 30, "power_w": 1900},
+        },
+    }
+    plan = _plan(
+        now,
+        forecast,
+        water_c=27.0,
+        target_c=30.0,
+        heating_rate_model=learned,
+    )
+    rows = pool_predictive.dashboard_forecast(forecast, plan, now)
+
+    assert rows[0]["mpc_heat_hours"] == 0
+    assert rows[-1]["mpc_heat_hours"] > 0
+    assert rows[-1]["mpc_preset"] in {"Smart", "Turbo"}
+    assert rows[-1]["predicted_water_end"] is not None

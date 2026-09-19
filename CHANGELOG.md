@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.8.3 - Bounded temperature calibration and Turbo handover
+
+- Fix certified temperature calibration that could remain active indefinitely when pump-speed telemetry dipped below the 70% reference: once the reference speed has been confirmed, the calibration clock is monotonic and is never restarted by later transient speed reports.
+- Bound the calibration startup and completion paths with a 5-minute grace period by default; a failed calibration releases control instead of leaving `measurement_active` stuck forever.
+- After a calibration timeout, continue predictive control from the best available temperature estimate and wait 15 minutes by default before retrying certification.
+- Keep decision-time calibration pump-only: an already-running PAC is stopped before the certified sample and restarts afterward only if the recalculated MPC still requests heat.
+- Fix `Turbo • ...` -> `Automatique` / predictive mode handover: cancel the Turbo timer and immediately release the physical PAC preset back to Smart. MPC may explicitly select Turbo again if its new plan genuinely requires it.
+- Expose `measurement_requested_at`, `measurement_elapsed_seconds`, `measurement_remaining_seconds` and `measurement_phase` on the predictive status sensor for dashboard diagnostics/countdowns.
+- Add the virtual `sensor.piscine_score_baignade` sensor: its state is the selected bathing opportunity `usage_score`, with the configured minimum score and related forecast scores in attributes.
+- No mandatory Home Assistant helper migration is required.
+
+
+## 0.8.2 - Temperature calibration, cover-aware MPC and HA log sensor
+
+- Use 70% as a temporary minimum during certified temperature calibration while preserving any already-higher automatic pump speed.
+- Tie certification to the normal `tempo_eau` circulation delay and immediately return pump-speed authority to the normal strategy after certification.
+- Recalculate MPC immediately after pool-cover changes and keep current vs expected-night cover states distinct.
+- Publish the virtual `sensor.pool_manager_log` entity with categorized recent Pool Manager events.
+- No mandatory Home Assistant helper migration is required.
+
+
 ## 0.8.1 - Aquagem remote-authority stability
 
 - Prevent Aquagem/iSaver local-control handover from fighting Pool Manager in `Intelligent` and `Hors Gel` modes.

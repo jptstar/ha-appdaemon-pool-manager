@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.1 - Aquagem remote-authority stability
+
+- Prevent Aquagem/iSaver local-control handover from fighting Pool Manager in `Intelligent` and `Hors Gel` modes.
+- Keep remote pump ownership alive before the iSaver ~60 s watchdog can return control to the physical panel; default keepalive is 30 s.
+- Auto-enable this protection for known Aquagem/iSaver fan entity ids even when the optional `entity_pompe_local_panel_assist` switch was not added to `apps.yaml`.
+- Keep the local-control handover deliberately available in `Température` and `Marche Forcée`, so manual panel control still works where intended.
+- When `entity_pompe_local_panel_assist` is configured, self-heal it back to OFF if it is restored or toggled ON while an automatic/safety-owned mode is active.
+- Add regression coverage for missing-switch Aquagem setups, automatic-mode keepalive, manual-mode non-interference and local-control self-healing.
+- Document the recommended Aquagem local-control entities and keepalive settings.
+
+
 ## 0.8.0 - Adaptive Thermal Model + MPC
 
 - Add a receding-horizon Model Predictive Controller (MPC) for predictive pool heating, enabled by default with `chauffage_predictif_mpc: true`.

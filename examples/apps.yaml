@@ -47,6 +47,36 @@ pool_manager:
   vitesse_min_pac_active: 47
   marge_temp_pac_c: 0.3
 
+  # Adaptive predictive heating (v0.8: Adaptive Thermal Model + MPC)
+  chauffage_predictif: true
+  chauffage_predictif_mpc: true
+  entity_meteo_chauffage_predictif: weather.home
+  entity_chauffage_predictif_status: sensor.pool_predictive_heating
+  chauffage_predictif_horizon_jours: 15
+  chauffage_predictif_temperature_baignade_min_c: 21
+  chauffage_predictif_temperature_baignade_ideale_c: 26
+  chauffage_predictif_score_baignade_min: 55
+
+  # Absolute reserve only. MPC computes a warmer adaptive floor when needed.
+  chauffage_predictif_temperature_min_eau_c: 22
+
+  # Cold-start fallbacks; certified learning progressively replaces them.
+  chauffage_predictif_gain_chauffe_c_par_h: 0.30
+  chauffage_predictif_perte_nuit_delta10_c_par_h: 0.05
+  chauffage_predictif_apprentissage: true
+
+  # Certified water temperature: exact 70% reference cycle, then stability.
+  chauffage_predictif_mesure_vitesse_pct: 70
+  chauffage_predictif_mesure_tempo_s: 900
+  chauffage_predictif_mesure_stabilite_s: 120
+  chauffage_predictif_mesure_variation_max_c: 0.15
+
+  # MPC search resolution and cold-start PAC power assumptions.
+  chauffage_predictif_mpc_pas_h: 1.0
+  chauffage_predictif_mpc_pas_temperature_c: 0.2
+  chauffage_predictif_mpc_puissance_smart_w: 1200
+  chauffage_predictif_mpc_puissance_turbo_w: 1900
+
   pac_priorite_soleil: true
   heure_debut_pac_soleil: "10:00:00"
   heure_fin_pac_soleil: "17:30:00"

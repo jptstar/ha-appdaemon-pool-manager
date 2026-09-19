@@ -149,8 +149,10 @@ chauffage_predictif_mpc_puissance_smart_w: 1200
 chauffage_predictif_mpc_puissance_turbo_w: 1900
 
 # Pool-water stabilization is shared with normal filtration:
-# tempo_eau is the only delay before the pipe probe is trusted after a
-# meaningful pump stop. Predictive sampling never owns pump speed.
+# tempo_eau is the delay after a meaningful pump stop.
+# 70% is the minimum speed for a certified physical temperature sample,
+# but predictive sampling never commands that speed.
+chauffage_predictif_mesure_vitesse_pct: 70
 
 # Optional absolute recoverability floor:
 # chauffage_predictif_temperature_min_eau_c: 22
@@ -160,7 +162,7 @@ chauffage_predictif_mpc_puissance_turbo_w: 1900
 
 A pipe sensor is not treated as the pool merely because the pump has just started. Pool Manager now uses the same hydraulic stabilization already used by normal filtration: after a meaningful stop, the probe is ignored until `tempo_eau` has elapsed. Short pump interruptions do not re-arm a full stabilization cycle.
 
-Predictive sampling is passive. It never starts an autonomous pump cycle and never overrides pump speed just to obtain a temperature. Once normal circulation has stabilized, the physical water probe can be certified and used by the thermal model. `mem_temp` remains the operational fallback while the pump is stopped and is never accepted as a new learning sample.
+Predictive sampling is passive. It never starts an autonomous pump cycle and never overrides pump speed just to obtain a temperature. Once normal circulation has stabilized, the physical water probe is certifiable only when the real pump speed is at least `chauffage_predictif_mesure_vitesse_pct` (**70% by default**). At 47–69%, the reading can still serve normal filtration logic, but it is not accepted as a certified MPC/learning sample. `mem_temp` remains the operational fallback while the pump is stopped and is never accepted as a new learning sample.
 
 If predictive heating genuinely needs to start while the pump is off, circulation may be started because heating itself requires flow. The controller then waits for the normal `tempo_eau` stabilization before using the physical probe for the final heating decision.
 
@@ -236,6 +238,16 @@ The real cover entity is used for learning. Future overnight forecasts use `chau
 
 `brassage_nuit_intelligent: false` remains independent: it disables periodic night mixing, but it does not prohibit an exceptional pump + PAC recovery when the thermal trajectory genuinely requires it.
 
+### Pool Manager log sensor
+
+Pool Manager mirrors every event written to the dedicated `piscine_log` AppDaemon log into a virtual Home Assistant entity. By default it is:
+
+```yaml
+entity_pool_manager_log: sensor.pool_manager_log
+```
+
+No Home Assistant helper is required. The entity state contains the latest event; attributes expose its timestamp, category, complete message and the last 20 events in `history`.
+
 ### Dashboard sensor
 
 If `entity_chauffage_predictif_status` is configured, useful attributes now include:
@@ -245,6 +257,8 @@ If `entity_chauffage_predictif_status` is configured, useful attributes now incl
 - `certified_water_temperature`
 - `certified_water_at`
 - `measurement_active`
+- `measurement_reference_speed_pct` (70% by default; validity threshold only)
+- `current_cover`
 - `next_swim_date`
 - `next_swim_usage_score`
 - `next_swim_weekend`

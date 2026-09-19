@@ -19,7 +19,10 @@ class _Runtime(module.PredictiveHeatingSupport):
 
 def _make_runtime(tmp_path):
     app = object.__new__(_Runtime)
-    app.args = {"temperature_eau": "sensor.water"}
+    app.args = {
+        "temperature_eau": "sensor.water",
+        "tempo_eau": "input_number.pool_water_circulation_delay",
+    }
     app.chauffage_predictif = True
     app.chauffage_predictif_apprentissage = True
     app.chauffage_predictif_learning_file = str(tmp_path / "thermal.json")
@@ -41,6 +44,8 @@ def _make_runtime(tmp_path):
     app.chauffage_predictif_measurement_started_at = None
     app.chauffage_predictif_measurement_stable_at = None
     app.chauffage_predictif_measurement_stable_temp = None
+    app.chauffage_predictif_measurement_previous_speed = None
+    app.fin_tempo = 1
 
     app._heating_learning_session = None
     app._passive_learning_session = None
@@ -69,6 +74,11 @@ def _make_runtime(tmp_path):
         app, "speed", max(app.speed, int(percentage))
     )
     app.turn_on_pompe_mem = lambda: setattr(app, "pump_on", True)
+    app.get_state = lambda entity, attribute=None: (
+        900
+        if entity == "input_number.pool_water_circulation_delay"
+        else None
+    )
     app.log = lambda *args, **kwargs: None
     return app
 
@@ -103,28 +113,32 @@ def test_thermal_learning_is_persisted_and_reloaded(tmp_path):
     )
 
 
-def test_below_70_percent_does_not_count_toward_certification(tmp_path):
+def test_below_70_percent_is_raised_to_certification_minimum(tmp_path):
     app = _make_runtime(tmp_path)
     app.speed = 60
     app.chauffage_predictif_measurement_active = True
     app.chauffage_predictif_measurement_purpose = "decision"
 
     start = datetime.datetime(2026, 9, 18, 8, 0)
-    app._update_certified_measurement(start)
+    assert app._update_certified_measurement(start) is False
 
-    # The explicit request raises the pump to 70%; the 15-minute certification
-    # timer therefore starts only on the next observation, not at 08:00.
+    # Calibration owns only a temporary minimum. The clock starts once the
+    # required hydraulic speed is established.
     assert app.speed == 70
-    app._update_certified_measurement(start + datetime.timedelta(minutes=5))
-    assert app.chauffage_predictif_measurement_started_at == (
-        start + datetime.timedelta(minutes=5)
-    )
+    assert app.chauffage_predictif_measurement_started_at == start
 
-    app._update_certified_measurement(start + datetime.timedelta(minutes=15))
+    assert app._update_certified_measurement(
+        start + datetime.timedelta(minutes=14, seconds=59)
+    ) is False
     assert app.chauffage_predictif_certified_water_c is None
 
+    assert app._update_certified_measurement(
+        start + datetime.timedelta(minutes=15)
+    ) is True
+    assert app.chauffage_predictif_certified_water_c == 25.0
 
-def test_temperature_certifies_after_15_minutes_at_70_plus_stability(tmp_path):
+
+def test_temperature_certifies_after_full_tempo_eau_at_70(tmp_path):
     app = _make_runtime(tmp_path)
     app.speed = 70
     app.chauffage_predictif_measurement_active = True
@@ -133,41 +147,32 @@ def test_temperature_certifies_after_15_minutes_at_70_plus_stability(tmp_path):
     start = datetime.datetime(2026, 9, 18, 8, 0)
     assert app._update_certified_measurement(start) is False
     assert app._update_certified_measurement(
-        start + datetime.timedelta(minutes=15)
-    ) is False
-
-    app.water = 25.04
-    assert app._update_certified_measurement(
-        start + datetime.timedelta(minutes=16)
+        start + datetime.timedelta(minutes=14, seconds=59)
     ) is False
 
     app.water = 25.06
     assert app._update_certified_measurement(
-        start + datetime.timedelta(minutes=17)
+        start + datetime.timedelta(minutes=15)
     ) is True
 
     assert app.chauffage_predictif_certified_water_c == 25.06
     assert app.chauffage_predictif_measurement_active is False
 
 
-def test_unstable_probe_extends_certification_window(tmp_path):
+def test_speed_above_70_is_preserved_during_calibration(tmp_path):
     app = _make_runtime(tmp_path)
-    app.speed = 70
+    app.speed = 85
     app.chauffage_predictif_measurement_active = True
     app.chauffage_predictif_measurement_purpose = "decision"
 
     start = datetime.datetime(2026, 9, 18, 8, 0)
-    app._update_certified_measurement(start)
-    app._update_certified_measurement(start + datetime.timedelta(minutes=15))
+    assert app._update_certified_measurement(start) is False
+    assert app.speed == 85
 
-    app.water = 25.4
-    app._update_certified_measurement(start + datetime.timedelta(minutes=16))
-    assert app.chauffage_predictif_certified_water_c is None
-
-    app.water = 25.42
-    app._update_certified_measurement(start + datetime.timedelta(minutes=17))
-    app._update_certified_measurement(start + datetime.timedelta(minutes=18))
-    assert app.chauffage_predictif_certified_water_c == 25.42
+    assert app._update_certified_measurement(
+        start + datetime.timedelta(minutes=15)
+    ) is True
+    assert app.speed == 85
 
 
 def test_night_loss_uses_two_certified_measurements_not_mem_temp(tmp_path):

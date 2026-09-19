@@ -234,7 +234,7 @@ chauffage_predictif_temperature_min_eau_c: 22
 
 Above that floor and without a useful bathing window, the PAC stays off. Forecast losses can trigger a small PRESERVE action before the pool becomes difficult to recover.
 
-The real cover entity is used for learning. Future overnight forecasts use `chauffage_predictif_volet_nuit_prevu` (default `closed` when a cover entity is configured), so an open daytime cover does not make the planner assume that every future night will also be open.
+The real cover entity is used for learning. A cover state change immediately re-evaluates Pool Manager/MPC and invalidates a passive-loss learning interval that spans an open/close transition. Future overnight forecasts use `chauffage_predictif_volet_nuit_prevu` (default `closed` when a cover entity is configured), so an open daytime cover does not make the planner assume that every future night will also be open. The predictive dashboard exposes both `current_cover` and `expected_night_cover`.
 
 `brassage_nuit_intelligent: false` remains independent: it disables periodic night mixing, but it does not prohibit an exceptional pump + PAC recovery when the thermal trajectory genuinely requires it.
 

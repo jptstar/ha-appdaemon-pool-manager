@@ -1118,7 +1118,7 @@ class PredictiveHeatingSupport:
         if override:
             return override
         if self.chauffage_predictif_measurement_active:
-            return "🌀 Mesure eau"
+            return "🌀 Stabil. mesure température"
         action = (plan or {}).get("action")
         if action == "PREHEAT":
             return f"🔥 Préparation {(plan or {}).get('preset') or 'Smart'}"
@@ -1235,10 +1235,14 @@ class PredictiveHeatingSupport:
             return
 
         try:
+            # Replace the attribute set atomically. AppDaemon/Home Assistant
+            # otherwise merges attributes and can leave obsolete v0.6.x fields
+            # such as schedule/heating_slots attached to the virtual sensor.
             self.set_state(
                 self.entity_chauffage_predictif_status,
                 state=state,
                 attributes=attributes,
+                replace=True,
             )
             self.chauffage_predictif_last_status_signature = signature
             self._recover("chauffage_predictif_status")
@@ -1374,16 +1378,62 @@ class PredictiveHeatingSupport:
         )
         self.chauffage_predictif_last_plan = plan
 
-        # If normal filtration is already running, use it to obtain the first
-        # certified measurement of the day before a nearby bathing opportunity.
+        # WAIT/PRESERVE-without-heat must stop the PAC immediately. Learning or
+        # temperature certification is never a reason to keep producing heat.
+        # An already requested measurement may continue with pump circulation
+        # only; the 70% clamp is handled by the pump/measurement layer.
+        if not plan.get("should_heat"):
+            self.chauffage_predictif_heat_requested = False
+            self.chauffage_predictif_heat_target_c = None
+            self._cancel_chauffage_start()
+
+            if self._pac_power_active():
+                self._pac_off(
+                    f"chauffage prédictif: {plan.get('reason', 'attente')}",
+                    post=True,
+                )
+
+            if (
+                self.chauffage_predictif_measurement_active
+                and self.chauffage_predictif_measurement_purpose
+                in {"heating_learning", "target_check"}
+            ):
+                self.chauffage_predictif_measurement_purpose = (
+                    "temperature_stabilization"
+                )
+
+            # If normal filtration is already running and a selected bathing
+            # window is close, use pump-only circulation to refresh the pool
+            # temperature. Never start the PAC for that measurement.
+            self._maybe_measure_during_normal_filtration(plan)
+
+            self._log_predictive_plan(plan, water, target, kind)
+            self._publish_predictive_status(
+                plan=plan,
+                forecast=forecast,
+                kind=kind,
+                water=water,
+                target=target,
+            )
+            return
+
+        # A real heat request may need a fresh certified pool temperature before
+        # the PAC is allowed to start or continue.
         self._maybe_measure_during_normal_filtration(plan)
 
-        # Never start a meaningful PAC recovery from a stale pipe/memory value.
-        # First perform the 70% / 15-minute certified mixing cycle.
         if self._measurement_required_before_action(plan):
             self.chauffage_predictif_heat_requested = False
             self.chauffage_predictif_heat_target_c = None
             self._cancel_chauffage_start()
+
+            # If the PAC happened to be active from the previous decision, stop
+            # it before the certification cycle: measurement must be pump-only.
+            if self._pac_power_active():
+                self._pac_off(
+                    "chauffage prédictif: mesure certifiée avant décision",
+                    post=True,
+                )
+
             self._request_predictive_measurement(
                 "decision",
                 start_pump=True,
@@ -1394,7 +1444,7 @@ class PredictiveHeatingSupport:
                 kind=kind,
                 water=water,
                 target=target,
-                override="🌀 Mesure eau avant décision",
+                override="🌀 Stabil. mesure température",
             )
             return
 
@@ -1407,49 +1457,13 @@ class PredictiveHeatingSupport:
             target=target,
         )
 
-        if plan.get("should_heat"):
-            self.chauffage_predictif_heat_requested = True
-            self.chauffage_predictif_heat_target_c = (
-                plan.get("heat_target_c") or target
-            )
-            return self._request_chauffage_start(
-                plan.get("preset") or self.chauffage_preset_smart,
-                f"prédictif {kind} {plan.get('action', '')}",
-            )
-
-        # If the PAC is currently active and the model only *estimates* that the
-        # trajectory target has been reached, certify the real pool temperature
-        # before switching it off. This avoids stopping on an optimistic model.
-        if self._pac_power_active():
-            certified_age = self._certified_age_s(datetime.datetime.now())
-            # A same-day morning certification can be several hours old. Never
-            # stop an active PAC solely because the learned model *estimates*
-            # that the trajectory target has been reached: obtain a fresh
-            # 70%/15-minute pool measurement first.
-            if (
-                certified_age is None
-                or certified_age > self.chauffage_predictif_mesure_tempo_s
-            ):
-                self._request_predictive_measurement(
-                    "target_check",
-                    start_pump=False,
-                )
-                self._publish_predictive_status(
-                    plan=plan,
-                    forecast=forecast,
-                    kind=kind,
-                    water=water,
-                    target=target,
-                    override="🌀 Vérification température",
-                )
-                return
-
-        self.chauffage_predictif_heat_requested = False
-        self.chauffage_predictif_heat_target_c = None
-        self._cancel_chauffage_start()
-        return self._pac_off(
-            f"chauffage prédictif: {plan.get('reason', 'attente')}",
-            post=True,
+        self.chauffage_predictif_heat_requested = True
+        self.chauffage_predictif_heat_target_c = (
+            plan.get("heat_target_c") or target
+        )
+        return self._request_chauffage_start(
+            plan.get("preset") or self.chauffage_preset_smart,
+            f"prédictif {kind} {plan.get('action', '')}",
         )
 
     def _predictive_start_still_allowed(self, kind):

@@ -217,7 +217,7 @@ class LifecycleMixin:
             self.listen_state(self.change_arret_force, self.args["arret_force"])
 
         if self.entity_volet_piscine:
-            self.listen_state(self.change_electrolyseur_context, self.entity_volet_piscine)
+            self.listen_state(self.change_volet_piscine, self.entity_volet_piscine)
 
         if self.entity_pompe_local_panel_assist:
             self.listen_state(
@@ -246,6 +246,29 @@ class LifecycleMixin:
         # L'état réel est repris puis la logique normale décide de la suite.
         self.maj_electrolyseur()
         self.set_debug_w("")
+
+    def change_volet_piscine(self, entity, attribute, old, new, kwargs):
+        self.maj_electrolyseur()
+
+        # A cover change alters passive thermal losses immediately. Mark the
+        # current passive-learning interval through the normal update path and
+        # recalculate the active strategy/MPC without waiting for the periodic
+        # refresh.
+        try:
+            if hasattr(self, "_update_predictive_learning"):
+                self._update_predictive_learning()
+        except Exception:
+            pass
+
+        try:
+            self.log(
+                f"Volet piscine: {old} -> {new}",
+                log="piscine_log",
+            )
+        except Exception:
+            pass
+
+        self.traitement(kwargs)
 
     def change_electrolyseur_context(self, entity, attribute, old, new, kwargs):
         self.maj_electrolyseur()

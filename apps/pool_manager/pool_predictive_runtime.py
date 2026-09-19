@@ -268,9 +268,9 @@ class PredictiveHeatingSupport:
             ),
         )
 
-        # A water measurement is "certified" only after enough real mixing.
-        # 47% remains the hydraulic low limit; certification deliberately uses
-        # the installation's stronger 70% reference speed.
+        # Legacy measurement settings are still parsed for configuration
+        # compatibility. Since the passive-sampling change, certification uses
+        # the shared pump-start stabilization (tempo_eau) and never owns speed.
         self.chauffage_predictif_mesure_vitesse_pct = max(
             47,
             min(
@@ -705,10 +705,11 @@ class PredictiveHeatingSupport:
         self._save_predictive_learning()
 
         try:
+            speed = self.get_fan_percentage()
+            speed_txt = f"{speed}%" if speed is not None else "vitesse inconnue"
             self.log(
                 f"Température eau certifiée: {water:.2f} °C "
-                f"({self.chauffage_predictif_mesure_vitesse_pct}% / "
-                f"{self.chauffage_predictif_mesure_tempo_s // 60} min"
+                f"({speed_txt}, circulation stabilisée via tempo_eau"
                 + (f", {purpose}" if purpose else "")
                 + ")",
                 log="piscine_log",
@@ -1212,11 +1213,11 @@ class PredictiveHeatingSupport:
                 self.chauffage_predictif_measurement_active
             ),
             "measurement_purpose": self.chauffage_predictif_measurement_purpose,
-            "measurement_reference_speed_pct": (
-                self.chauffage_predictif_mesure_vitesse_pct
-            ),
+            "measurement_reference_speed_pct": None,
             "measurement_reference_seconds": (
-                self.chauffage_predictif_mesure_tempo_s
+                self._safe_int_state(self.args.get("tempo_eau"), 0)
+                if hasattr(self, "_safe_int_state")
+                else 0
             ),
             "target_temperature": (
                 round(float(target), 1) if target is not None else None

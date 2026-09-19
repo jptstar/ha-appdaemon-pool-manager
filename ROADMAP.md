@@ -22,3 +22,15 @@
 - [x] Formalize daily `target / completed / remaining` filtration presentation.
 - [ ] Improve restart recovery and decision diagnostics.
 - [ ] Add a dry-run/observer mode for side-by-side validation before enabling broader pump-control changes.
+
+
+## 0.8.x - Adaptive Thermal Model + MPC
+
+- [x] Reuse certified PAC gain/power and passive-loss learning as an adaptive thermal model.
+- [x] Add receding-horizon MPC over OFF / Smart / Turbo choices.
+- [x] Minimize predicted PAC energy while respecting the absolute floor and bathing target.
+- [x] Add a dynamic adaptive recoverability floor.
+- [x] Prefer daytime recovery and admit night heating only as an exceptional second-pass solution.
+- [x] Expose the day-by-day optimized plan and predicted energy on the Home Assistant status sensor.
+- [ ] Validate learned model accuracy over a longer production period and tune default MPC penalties only from real data.
+- [ ] Consider optional learned bathing-probability feedback as a separate future layer; keep thermal safety independent.

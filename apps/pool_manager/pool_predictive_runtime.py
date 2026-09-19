@@ -673,6 +673,17 @@ class PredictiveHeatingSupport:
             return False
         if not self.pompe_est_on():
             return False
+        if not bool(getattr(self, "fin_tempo", 0)):
+            return False
+
+        speed = self.get_fan_percentage()
+        if (
+            speed is None
+            or speed < self.chauffage_predictif_mesure_vitesse_pct
+        ):
+            # 70% by default is a validity threshold only. Never change pump
+            # speed merely to obtain a predictive temperature sample.
+            return False
 
         if not self.chauffage_predictif_measurement_active:
             self.chauffage_predictif_measurement_active = True
@@ -734,6 +745,18 @@ class PredictiveHeatingSupport:
             if not self.chauffage_predictif_measurement_active:
                 self.chauffage_predictif_measurement_active = True
                 self.chauffage_predictif_measurement_purpose = "startup_stabilization"
+            return False
+
+        speed = self.get_fan_percentage()
+        if (
+            speed is None
+            or speed < self.chauffage_predictif_mesure_vitesse_pct
+        ):
+            # Hydraulic stabilization may be complete, but a low-speed pipe
+            # reading is not representative enough to train/drive MPC. Do not
+            # keep displaying an endless "stabilisation" state: simply wait for
+            # a later normal circulation at or above the reference threshold.
+            self._reset_measurement_tracker()
             return False
 
         last_start = getattr(self, "last_pompe_on", None)
@@ -1020,7 +1043,7 @@ class PredictiveHeatingSupport:
 
             # When circulation is stopped, project passive cooling from the last
             # certified pool temperature. This is an estimate only; the first
-            # new 70%/15 min certification corrects it the next day.
+            # new sample after tempo_eau at/above the reference speed corrects it.
             if not self.pompe_est_on():
                 loss_rate = estimate_loss_rate(
                     water,
@@ -1213,8 +1236,13 @@ class PredictiveHeatingSupport:
                 self.chauffage_predictif_measurement_active
             ),
             "measurement_purpose": self.chauffage_predictif_measurement_purpose,
-            "measurement_reference_speed_pct": None,
-            "measurement_reference_seconds": None,
+            "measurement_reference_speed_pct": (
+                self.chauffage_predictif_mesure_vitesse_pct
+            ),
+            "measurement_reference_seconds": int(
+                self.get_float_state(self.args.get("tempo_eau"), 0.0)
+            ),
+            "current_cover": self._predictive_cover_state(),
             "target_temperature": (
                 round(float(target), 1) if target is not None else None
             ),
@@ -1284,6 +1312,7 @@ class PredictiveHeatingSupport:
             attributes.get("water_temperature_estimated"),
             attributes.get("certified_water_temperature"),
             attributes.get("measurement_active"),
+            attributes.get("current_cover"),
             attributes.get("target_temperature"),
             attributes.get("heating_now"),
             attributes.get("recommended_preset"),

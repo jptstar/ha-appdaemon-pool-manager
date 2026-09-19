@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Copyright (C) 2026 jptstar
 
+import datetime
+
 import hassapi as hass
 
 from pool_common import *
@@ -29,6 +31,74 @@ class FiltrationPiscine(
     ControlMixin,
     hass.Hass,
 ):
+    def log(self, msg, *args, **kwargs):
+        """Mirror the dedicated piscine_log stream into a Home Assistant sensor."""
+        result = super().log(msg, *args, **kwargs)
+
+        if kwargs.get("log") == "piscine_log":
+            try:
+                self._publish_pool_manager_log(msg)
+            except Exception:
+                # Logging must never interfere with pool control.
+                pass
+        return result
+
+    @staticmethod
+    def _pool_log_category(message):
+        text = str(message or "").casefold()
+        if any(word in text for word in ("sécurité", "securite", "hors gel", "fail-safe", "⚠", "erreur", "fault")):
+            return "SÉCURITÉ"
+        if any(word in text for word in ("volet", "cover")):
+            return "VOLET"
+        if any(word in text for word in ("mpc", "prédictif", "predictif", "forecast", "prévision")):
+            return "MPC"
+        if any(word in text for word in ("température eau certifiée", "mesure", "stabilisation", "temperature")):
+            return "MESURE"
+        if any(word in text for word in ("pac", "chauffage", "smart", "turbo")):
+            return "PAC"
+        if any(word in text for word in ("pompe", "vitesse", "circulation", "filtration")):
+            return "POMPE"
+        return "SYSTÈME"
+
+    def _publish_pool_manager_log(self, message):
+        entity = getattr(self, "entity_pool_manager_log", None)
+        if not entity:
+            return
+
+        now = datetime.datetime.now()
+        text = str(message or "").strip()
+        category = self._pool_log_category(text)
+
+        history = list(getattr(self, "_pool_manager_log_history", []))
+        entry = {
+            "timestamp": now.isoformat(timespec="seconds"),
+            "category": category,
+            "message": text,
+        }
+        if not history or history[-1] != entry:
+            history.append(entry)
+        history = history[-20:]
+        self._pool_manager_log_history = history
+
+        state = f"{now.strftime('%H:%M:%S')} • {category} • {text}"
+        if len(state) > 250:
+            state = state[:247] + "..."
+
+        self.set_state(
+            entity,
+            state=state,
+            attributes={
+                "friendly_name": "Piscine • Journal",
+                "icon": "mdi:text-box-outline",
+                "timestamp": entry["timestamp"],
+                "category": category,
+                "message": text,
+                "history": history,
+                "history_size": len(history),
+            },
+            replace=True,
+        )
+
     def call_service(self, service, **kwargs):
         """Keep legacy response calls compatible with AppDaemon 4.5+.
 
@@ -45,6 +115,11 @@ class FiltrationPiscine(
     def initialize(self):
         """Initialize the production controller and optional HA policy inputs."""
         self.entity_derogation_chauffage = self.args.get("entity_derogation_chauffage")
+        self.entity_pool_manager_log = self.args.get(
+            "entity_pool_manager_log",
+            "sensor.pool_manager_log",
+        )
+        self._pool_manager_log_history = []
 
         # Cold-water chlorination protection. The lock starts conservative so an
         # AppDaemon restart around the threshold cannot briefly enable the cell.
@@ -61,6 +136,8 @@ class FiltrationPiscine(
         self.electrolyse_basse_temp_bloquee = True
 
         super().initialize()
+
+        self.log("Pool Manager initialisé", log="piscine_log")
 
         if self.entity_derogation_chauffage:
             self.listen_state(

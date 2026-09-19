@@ -64,6 +64,7 @@ pool_manager:
   chauffage_predictif_mpc: true
   entity_meteo_chauffage_predictif: weather.home
   entity_chauffage_predictif_status: sensor.pool_predictive_heating
+  entity_chauffage_predictif_score: sensor.piscine_score_baignade
   chauffage_predictif_horizon_jours: 15
   chauffage_predictif_temperature_baignade_min_c: 21
   chauffage_predictif_temperature_baignade_ideale_c: 26

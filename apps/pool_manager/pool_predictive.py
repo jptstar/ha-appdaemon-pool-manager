@@ -1136,14 +1136,31 @@ def dashboard_forecast(forecast, plan, today):
     selected_date = candidate.get("date")
     start_date = (plan or {}).get("recovery_start_date")
 
+    mpc_items = {
+        item.get("date"): item
+        for item in ((plan or {}).get("mpc_plan") or [])
+        if isinstance(item, dict) and item.get("date") is not None
+    }
+    has_mpc_schedule = bool(mpc_items)
+
     rows = []
     for index, day in enumerate(forecast or []):
         day_date = day.get("date") or (today + datetime.timedelta(days=index))
-        preheat = bool(
-            start_date is not None
-            and selected_date is not None
-            and start_date <= day_date < selected_date
-        )
+        mpc_item = mpc_items.get(day_date) or {}
+        mpc_heat_hours = _number(mpc_item.get("heat_hours")) or 0.0
+        mpc_night_heat_hours = _number(mpc_item.get("night_heat_hours")) or 0.0
+
+        if has_mpc_schedule:
+            heating = mpc_heat_hours > 0.0
+            preheat = bool(heating and day_date != selected_date)
+        else:
+            preheat = bool(
+                start_date is not None
+                and selected_date is not None
+                and start_date <= day_date < selected_date
+            )
+            heating = bool(preheat or day_date == selected_date)
+
         rows.append(
             {
                 "offset": index,
@@ -1166,7 +1183,17 @@ def dashboard_forecast(forecast, plan, today):
                 "usage_window": day.get("usage_window"),
                 "swim": day_date == selected_date,
                 "preheat": preheat,
-                "heating": bool(preheat or day_date == selected_date),
+                "heating": heating,
+                "mpc_heat_hours": round(mpc_heat_hours, 2),
+                "mpc_night_heat_hours": round(mpc_night_heat_hours, 2),
+                "mpc_preset": mpc_item.get("preset"),
+                "mpc_energy_kwh": _number(mpc_item.get("energy_kwh")),
+                "predicted_water_start": _number(
+                    mpc_item.get("start_temperature")
+                ),
+                "predicted_water_end": _number(
+                    mpc_item.get("end_temperature")
+                ),
             }
         )
     return rows

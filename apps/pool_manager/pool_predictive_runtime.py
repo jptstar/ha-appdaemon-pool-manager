@@ -342,6 +342,32 @@ class PredictiveHeatingSupport:
                 )
             ),
         )
+        # A certified calibration must never hold the controller forever.
+        # The reference speed gets a short grace period to settle; after a
+        # failed calibration, predictive heating is allowed to continue from
+        # the best available estimate and retries later.
+        self.chauffage_predictif_mesure_timeout_grace_s = max(
+            60,
+            int(
+                float(
+                    self.args.get(
+                        "chauffage_predictif_mesure_timeout_grace_s",
+                        300,
+                    )
+                )
+            ),
+        )
+        self.chauffage_predictif_mesure_retry_s = max(
+            60,
+            int(
+                float(
+                    self.args.get(
+                        "chauffage_predictif_mesure_retry_s",
+                        900,
+                    )
+                )
+            ),
+        )
         self.chauffage_predictif_mesure_anticipation_jours = max(
             1,
             min(
@@ -404,7 +430,9 @@ class PredictiveHeatingSupport:
         self.chauffage_predictif_measurement_active = False
         self.chauffage_predictif_measurement_purpose = None
         self.chauffage_predictif_measurement_previous_speed = None
+        self.chauffage_predictif_measurement_requested_at = None
         self.chauffage_predictif_measurement_started_at = None
+        self.chauffage_predictif_measurement_failed_at = None
         self.chauffage_predictif_measurement_stable_at = None
         self.chauffage_predictif_measurement_stable_temp = None
 
@@ -657,6 +685,64 @@ class PredictiveHeatingSupport:
             return False
         return True
 
+    def _measurement_tempo_eau_s(self):
+        try:
+            return max(
+                0,
+                int(float(self.get_state(self.args["tempo_eau"]))),
+            )
+        except Exception:
+            return 0
+
+    def _measurement_retry_blocked(self, now=None):
+        failed_at = getattr(
+            self,
+            "chauffage_predictif_measurement_failed_at",
+            None,
+        )
+        if failed_at is None:
+            return False
+        now = now or datetime.datetime.now()
+        try:
+            age = max(0.0, (now - failed_at).total_seconds())
+        except TypeError:
+            return False
+        return age < self.chauffage_predictif_mesure_retry_s
+
+    def _measurement_progress(self, now=None):
+        now = now or datetime.datetime.now()
+        tempo_eau = self._measurement_tempo_eau_s()
+        if not self.chauffage_predictif_measurement_active:
+            return None, None, None
+
+        started_at = self.chauffage_predictif_measurement_started_at
+        if not isinstance(started_at, datetime.datetime):
+            return 0, tempo_eau, "raising_flow"
+
+        try:
+            elapsed = max(0, int((now - started_at).total_seconds()))
+        except TypeError:
+            elapsed = 0
+        return elapsed, max(0, tempo_eau - elapsed), "stabilizing"
+
+    def _abort_measurement_timeout(self, now, reason):
+        self.chauffage_predictif_measurement_failed_at = now
+        try:
+            self._fault("chauffage_predictif_measurement_timeout", reason)
+        except Exception:
+            pass
+        try:
+            self.log(
+                f"Mesure température abandonnée: {reason}; "
+                f"nouvelle tentative dans "
+                f"{self.chauffage_predictif_mesure_retry_s // 60} min",
+                log="piscine_log",
+            )
+        except Exception:
+            pass
+        self._reset_measurement_tracker()
+        return False
+
     def _reset_measurement_tracker(self, keep_request=False):
         self.chauffage_predictif_measurement_started_at = None
         self.chauffage_predictif_measurement_stable_at = None
@@ -666,6 +752,7 @@ class PredictiveHeatingSupport:
             self.chauffage_predictif_measurement_active = False
             self.chauffage_predictif_measurement_purpose = None
             self.chauffage_predictif_measurement_previous_speed = None
+            self.chauffage_predictif_measurement_requested_at = None
 
             # Calibration only owns a temporary minimum speed. Once finished,
             # immediately hand control back to the normal automatic strategy.
@@ -676,15 +763,17 @@ class PredictiveHeatingSupport:
                     pass
 
     def _request_predictive_measurement(self, purpose, start_pump=False):
-        """Start a short certified calibration on an already justified pump run.
+        """Start a bounded certified calibration on an already justified run.
 
-        The calibration requires at least the configured reference speed
-        (70% by default). If the pump already runs faster, its current speed is
-        preserved. If it runs slower, it is temporarily raised to the minimum.
+        The configured reference speed (70% by default) is a temporary minimum.
+        Once that speed has been reached, the stabilization clock is monotonic:
+        later telemetry dips never restart the full calibration.
         """
         if not self.chauffage_predictif:
             return False
         if self.arret_force_actif():
+            return False
+        if self._measurement_retry_blocked():
             return False
         if not self.pompe_est_on():
             return False
@@ -698,6 +787,9 @@ class PredictiveHeatingSupport:
             self.chauffage_predictif_measurement_purpose = str(purpose)
             self.chauffage_predictif_measurement_previous_speed = int(speed)
             self._reset_measurement_tracker(keep_request=True)
+            self.chauffage_predictif_measurement_requested_at = (
+                datetime.datetime.now()
+            )
 
         minimum = self.chauffage_predictif_mesure_vitesse_pct
         if speed < minimum:
@@ -711,6 +803,14 @@ class PredictiveHeatingSupport:
     def _register_certified_measurement(self, now, water):
         self.chauffage_predictif_certified_water_c = float(water)
         self.chauffage_predictif_certified_at = now
+        self.chauffage_predictif_measurement_failed_at = None
+        try:
+            self._recover(
+                "chauffage_predictif_measurement_timeout",
+                "mesure température certifiée",
+            )
+        except Exception:
+            pass
 
         self._finalize_passive_learning(now, float(water))
 
@@ -761,9 +861,9 @@ class PredictiveHeatingSupport:
 
         minimum = self.chauffage_predictif_mesure_vitesse_pct
 
-        # A new pump run needs one certified calibration. Calibration owns only
-        # a temporary minimum: if automatic control is already >= minimum, keep
-        # that speed; otherwise raise it to the minimum.
+        # A new pump run needs one certified calibration. Do not immediately
+        # re-arm after a bounded calibration failure: the controller may keep
+        # operating from its best estimate and retry after the cooldown.
         last_start = getattr(self, "last_pompe_on", None)
         certified_at = self.chauffage_predictif_certified_at
         new_run_needs_sample = certified_at is None
@@ -776,49 +876,84 @@ class PredictiveHeatingSupport:
         if (
             not self.chauffage_predictif_measurement_active
             and new_run_needs_sample
+            and not self._measurement_retry_blocked(now)
         ):
             self.chauffage_predictif_measurement_active = True
             self.chauffage_predictif_measurement_purpose = "startup_calibration"
             self.chauffage_predictif_measurement_previous_speed = int(speed)
-            self.chauffage_predictif_measurement_started_at = now
+            self.chauffage_predictif_measurement_requested_at = now
+            self.chauffage_predictif_measurement_started_at = (
+                now if speed >= minimum else None
+            )
 
         if not self.chauffage_predictif_measurement_active:
             return False
 
+        if self.chauffage_predictif_measurement_requested_at is None:
+            self.chauffage_predictif_measurement_requested_at = now
+
+        # Before the reference speed has ever been observed, keep requesting the
+        # temporary minimum. Give the device a bounded grace period to report the
+        # new speed instead of leaving "measurement_active" stuck forever.
         if speed < minimum:
             try:
                 self.set_pump_percentage(minimum, force=True)
-                speed = minimum
-                # The stabilization clock starts when the required hydraulic
-                # speed is actually established, not merely when the pump starts.
-                self.chauffage_predictif_measurement_started_at = now
             except Exception:
-                self._reset_measurement_tracker()
+                return self._abort_measurement_timeout(
+                    now,
+                    "vitesse de calibration impossible à commander",
+                )
+
+            if self.chauffage_predictif_measurement_started_at is None:
+                try:
+                    waiting_s = (
+                        now - self.chauffage_predictif_measurement_requested_at
+                    ).total_seconds()
+                except TypeError:
+                    waiting_s = 0.0
+                if waiting_s >= self.chauffage_predictif_mesure_timeout_grace_s:
+                    return self._abort_measurement_timeout(
+                        now,
+                        f"vitesse {minimum}% non confirmée dans le délai",
+                    )
                 return False
+
+            # Important: after the reference speed has been reached once, a
+            # transient/lagging speed report must NOT restart the full timer.
         elif self.chauffage_predictif_measurement_started_at is None:
             self.chauffage_predictif_measurement_started_at = now
 
-        # Keep the normal pump-start delay as a safety gate, then additionally
-        # require a full calibration delay at >= the reference speed.
-        if not bool(getattr(self, "fin_tempo", 0)):
+        tempo_eau = self._measurement_tempo_eau_s()
+        started_at = self.chauffage_predictif_measurement_started_at
+        if started_at is None:
             return False
 
         try:
-            tempo_eau = max(
-                0,
-                int(float(self.get_state(self.args["tempo_eau"]))),
-            )
-        except Exception:
-            tempo_eau = 0
+            elapsed = max(0.0, (now - started_at).total_seconds())
+        except TypeError:
+            elapsed = 0.0
 
-        elapsed = (
-            now - self.chauffage_predictif_measurement_started_at
-        ).total_seconds()
+        # The normal pump-start delay and the certified calibration run in
+        # parallel. If the lifecycle gate itself gets stuck, release the
+        # calibration after tempo_eau + the bounded grace period.
+        if not bool(getattr(self, "fin_tempo", 0)):
+            if elapsed >= tempo_eau + self.chauffage_predictif_mesure_timeout_grace_s:
+                return self._abort_measurement_timeout(
+                    now,
+                    "temporisation circulation fin_tempo non validée",
+                )
+            return False
+
         if elapsed < tempo_eau:
             return False
 
         water = self._predictive_physical_water_raw()
         if water is None:
+            if elapsed >= tempo_eau + self.chauffage_predictif_mesure_timeout_grace_s:
+                return self._abort_measurement_timeout(
+                    now,
+                    "sonde température eau indisponible",
+                )
             return False
 
         self._register_certified_measurement(now, float(water))
@@ -1299,7 +1434,11 @@ class PredictiveHeatingSupport:
             return
 
         candidate = (plan or {}).get("candidate") or {}
-        rows = dashboard_forecast(forecast, plan or {}, datetime.datetime.now())
+        status_now = datetime.datetime.now()
+        measurement_elapsed_s, measurement_remaining_s, measurement_phase = (
+            self._measurement_progress(status_now)
+        )
+        rows = dashboard_forecast(forecast, plan or {}, status_now)
         attributes = {
             "friendly_name": "Piscine chauffage prédictif",
             "icon": "mdi:pool-thermometer",
@@ -1321,12 +1460,16 @@ class PredictiveHeatingSupport:
                 self.chauffage_predictif_measurement_active
             ),
             "measurement_purpose": self.chauffage_predictif_measurement_purpose,
+            "measurement_requested_at": self._iso_datetime(
+                self.chauffage_predictif_measurement_requested_at
+            ),
             "measurement_reference_speed_pct": (
                 self.chauffage_predictif_mesure_vitesse_pct
             ),
-            "measurement_reference_seconds": int(
-                self.get_float_state(self.args.get("tempo_eau"), 0.0)
-            ),
+            "measurement_reference_seconds": self._measurement_tempo_eau_s(),
+            "measurement_elapsed_seconds": measurement_elapsed_s,
+            "measurement_remaining_seconds": measurement_remaining_s,
+            "measurement_phase": measurement_phase,
             "current_cover": self._predictive_cover_state(),
             "target_temperature": (
                 round(float(target), 1) if target is not None else None
@@ -1397,6 +1540,8 @@ class PredictiveHeatingSupport:
             attributes.get("water_temperature_estimated"),
             attributes.get("certified_water_temperature"),
             attributes.get("measurement_active"),
+            attributes.get("measurement_remaining_seconds"),
+            attributes.get("measurement_phase"),
             attributes.get("current_cover"),
             attributes.get("target_temperature"),
             attributes.get("heating_now"),
@@ -1469,14 +1614,20 @@ class PredictiveHeatingSupport:
     def _measurement_required_before_action(self, plan):
         if not (plan or {}).get("should_heat"):
             return False
-        if self._certified_fresh(datetime.datetime.now(), same_day=True):
+        now = datetime.datetime.now()
+        if self._certified_fresh(now, same_day=True):
+            return False
+        if self._measurement_retry_blocked(now):
             return False
         return True
 
     def _maybe_measure_during_normal_filtration(self, plan):
         if self.chauffage_predictif_measurement_active:
             return False
-        if self._certified_fresh(datetime.datetime.now(), same_day=True):
+        now = datetime.datetime.now()
+        if self._certified_fresh(now, same_day=True):
+            return False
+        if self._measurement_retry_blocked(now):
             return False
         if not self.pompe_est_on():
             return False
@@ -1605,6 +1756,17 @@ class PredictiveHeatingSupport:
             self.chauffage_predictif_heat_target_c = (
                 plan.get("heat_target_c") or target
             )
+
+            # A decision calibration must be pump-only. This is especially
+            # important when leaving a forced Turbo mode: do not let the old
+            # preset keep heating while the MPC waits for a certified sample.
+            try:
+                self._pac_off(
+                    "chauffage prédictif: mesure température avant décision",
+                    post=False,
+                )
+            except Exception:
+                pass
 
             if not self.pompe_est_on():
                 try:

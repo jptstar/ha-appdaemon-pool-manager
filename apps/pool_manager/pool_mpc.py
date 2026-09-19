@@ -789,11 +789,12 @@ def build_mpc_plan(
     else:
         heat_target = None
 
-    # Equivalent future capacity margin is kept for dashboard compatibility,
-    # while adaptive_floor_c is the more useful v0.8 reserve indicator.
+    # v0.8 gives the dashboard margin a physical meaning: how many real water
+    # degrees currently separate the pool from the adaptive recoverability
+    # floor. A negative value means the optimized trajectory already requires
+    # recovery now.
     required_gain = max(0.0, target - projected_no_heat)
-    planned_gain = max(0.0, float(path[-1]["end_temperature"]) - projected_no_heat)
-    thermal_margin = planned_gain - required_gain
+    thermal_margin = water - adaptive_floor
 
     reason = (
         f"MPC énergie minimale vers {selected_candidate['date'].isoformat()}; "

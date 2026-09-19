@@ -392,7 +392,7 @@ class LifecycleMixin:
         # Une coupure plus courte que le délai de circulation n'impose pas de
         # nouvelle stabilisation. Après un arrêt significatif (typiquement la
         # nuit), on attend simplement tempo_eau puis la sonde redevient fiable.
-        self.fin_tempo = 0 if duree_arret >= tempo_eau else 1
+        self.fin_tempo = 0 if tempo_eau > 0 and duree_arret >= tempo_eau else 1
 
     def ecretage_h_pivot(self, entity, attribute, old, new, kwargs):
         if new > "15:00:00":

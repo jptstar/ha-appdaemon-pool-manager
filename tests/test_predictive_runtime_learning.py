@@ -247,3 +247,46 @@ def test_heating_estimate_starts_at_actual_pac_session_not_old_certification(tmp
 
     estimated = app._predictive_water_temperature()
     assert 25.35 <= estimated <= 25.45
+
+
+def test_wait_stops_active_pac_immediately_and_keeps_measurement_pump_only(tmp_path):
+    app = _make_runtime(tmp_path)
+    calls = []
+
+    app.chauffage_predictif_heat_requested = True
+    app.chauffage_predictif_heat_target_c = 31.0
+    app.chauffage_predictif_last_plan = None
+    app.chauffage_predictif_measurement_active = True
+    app.chauffage_predictif_measurement_purpose = "heating_learning"
+
+    app._refresh_predictive_forecast = lambda: []
+    app._predictive_water_temperature = lambda: 28.7
+    app._pac_target_temperature = lambda: 31.0
+    app._recover = lambda *args, **kwargs: None
+    app._build_runtime_predictive_plan = lambda *args, **kwargs: {
+        "action": "WAIT",
+        "should_heat": False,
+        "reason": "trajectoire suffisante",
+        "candidate": {},
+        "floor_c": 22.0,
+        "trajectory_target_c": 22.0,
+    }
+    app._cancel_chauffage_start = lambda: calls.append(("cancel_start",))
+    app._pac_power_active = lambda: True
+    app._pac_off = lambda reason, post=True: calls.append(
+        ("pac_off", reason, post)
+    ) or True
+    app._maybe_measure_during_normal_filtration = lambda plan: False
+    app._log_predictive_plan = lambda *args, **kwargs: None
+    app._publish_predictive_status = lambda **kwargs: None
+
+    app._manage_predictive_heating("end_season")
+
+    assert any(call[0] == "pac_off" for call in calls)
+    assert app.chauffage_predictif_heat_requested is False
+    assert app.chauffage_predictif_heat_target_c is None
+    assert app.chauffage_predictif_measurement_active is True
+    assert (
+        app.chauffage_predictif_measurement_purpose
+        == "temperature_stabilization"
+    )

@@ -113,8 +113,23 @@ class DevicesMixin:
                 else percentage
             )
 
-        # Predictive temperature sampling never owns pump speed. The normal
-        # filtration/heating strategy remains the single speed authority.
+        # During a certified temperature calibration, 70% (configurable) is a
+        # temporary minimum only. Higher automatic requests remain untouched.
+        if bool(getattr(self, "chauffage_predictif_measurement_active", False)):
+            minimum = int(
+                max(
+                    0,
+                    min(
+                        100,
+                        getattr(
+                            self,
+                            "chauffage_predictif_mesure_vitesse_pct",
+                            70,
+                        ),
+                    ),
+                )
+            )
+            percentage = max(percentage, minimum)
 
         if not force and abs(percentage - current) < self.delta_vitesse_min:
             return current

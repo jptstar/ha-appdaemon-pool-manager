@@ -59,7 +59,7 @@ pool_manager:
   vitesse_min_pac_active: 47
   marge_temp_pac_c: 0.3
 
-  # Adaptive predictive heating (v0.8: Adaptive Thermal Model + MPC)
+  # Adaptive predictive heating (v0.9: full-horizon Adaptive Thermal Model + MPC)
   chauffage_predictif: true
   chauffage_predictif_mpc: true
   entity_meteo_chauffage_predictif: weather.home
@@ -69,6 +69,7 @@ pool_manager:
   chauffage_predictif_temperature_baignade_min_c: 21
   chauffage_predictif_temperature_baignade_ideale_c: 26
   chauffage_predictif_score_baignade_min: 55
+  chauffage_predictif_bonus_weekend: 10
 
   # Absolute reserve only. MPC computes a warmer adaptive floor when needed.
   chauffage_predictif_temperature_min_eau_c: 22

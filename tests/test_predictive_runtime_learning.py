@@ -420,3 +420,20 @@ def test_predictive_score_sensor_uses_usage_score_and_exposes_threshold(tmp_path
     assert payload["attributes"]["strategic_score"] == 64.5
     assert payload["attributes"]["date"] == "2026-09-20"
 
+
+
+def test_forced_turbo_countdown_uses_deadline_not_static_timer_remaining(tmp_path):
+    app = _make_runtime(tmp_path)
+    start = datetime.datetime(2026, 9, 19, 14, 0, 0)
+    app.chauffage_turbo_ends_at = start + datetime.timedelta(hours=6)
+    app.entity_chauffage_timer = "timer.piscine_chauffage"
+
+    ends_at, remaining = app._forced_heating_timer_progress(start)
+
+    assert ends_at == "2026-09-19T20:00:00"
+    assert remaining == 6 * 3600
+
+    _, later_remaining = app._forced_heating_timer_progress(
+        start + datetime.timedelta(minutes=37, seconds=19)
+    )
+    assert later_remaining == 5 * 3600 + 22 * 60 + 41

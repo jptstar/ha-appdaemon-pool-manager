@@ -136,6 +136,10 @@ class PredictiveHeatingSupport:
                 55.0,
             )
         )
+        self.chauffage_predictif_bonus_weekend = max(
+            0.0,
+            float(self.args.get("chauffage_predictif_bonus_weekend", 10.0)),
+        )
 
         # Initial fallback values; learned installation data progressively takes
         # precedence over them.
@@ -1356,6 +1360,7 @@ class PredictiveHeatingSupport:
                 night_penalty_kwh_per_h=(
                     self.chauffage_predictif_mpc_penalite_nuit_kwh_h
                 ),
+                weekend_bonus=self.chauffage_predictif_bonus_weekend,
             )
         return build_predictive_plan(**common)
 
@@ -1366,6 +1371,46 @@ class PredictiveHeatingSupport:
     @staticmethod
     def _iso_datetime(value):
         return value.isoformat() if isinstance(value, datetime.datetime) else None
+
+
+    def _forced_heating_timer_progress(self, now=None):
+        """Return forced-heating deadline + live remaining seconds.
+
+        Prefer the internal Turbo deadline because Home Assistant's timer
+        `remaining` attribute is not a live countdown. Fall back to the timer's
+        `finishes_at` timestamp after an AppDaemon restart.
+        """
+        now = now or datetime.datetime.now()
+        deadline = getattr(self, "chauffage_turbo_ends_at", None)
+
+        if not isinstance(deadline, datetime.datetime):
+            entity = getattr(self, "entity_chauffage_timer", None)
+            if entity:
+                try:
+                    if self.get_state(entity) == "active":
+                        deadline = self._parse_datetime(
+                            self.get_state(entity, attribute="finishes_at")
+                        )
+                except Exception:
+                    deadline = None
+
+        if not isinstance(deadline, datetime.datetime):
+            return None, None
+
+        try:
+            compare_now = now
+            if deadline.tzinfo is not None and compare_now.tzinfo is None:
+                compare_now = datetime.datetime.now(deadline.tzinfo)
+            elif deadline.tzinfo is None and compare_now.tzinfo is not None:
+                compare_now = compare_now.replace(tzinfo=None)
+            remaining = max(
+                0,
+                int((deadline - compare_now).total_seconds()),
+            )
+        except (TypeError, ValueError):
+            return self._iso_datetime(deadline), None
+
+        return self._iso_datetime(deadline), remaining
 
     def _predictive_status_state(self, plan, kind, override=None):
         if override:
@@ -1454,6 +1499,9 @@ class PredictiveHeatingSupport:
         measurement_elapsed_s, measurement_remaining_s, measurement_phase = (
             self._measurement_progress(status_now)
         )
+        forced_timer_ends_at, forced_timer_remaining_s = (
+            self._forced_heating_timer_progress(status_now)
+        )
         rows = dashboard_forecast(forecast, plan or {}, status_now)
         attributes = {
             "friendly_name": "Piscine chauffage prédictif",
@@ -1486,6 +1534,8 @@ class PredictiveHeatingSupport:
             "measurement_elapsed_seconds": measurement_elapsed_s,
             "measurement_remaining_seconds": measurement_remaining_s,
             "measurement_phase": measurement_phase,
+            "forced_heating_ends_at": forced_timer_ends_at,
+            "forced_heating_remaining_seconds": forced_timer_remaining_s,
             "current_cover": self._predictive_cover_state(),
             "target_temperature": (
                 round(float(target), 1) if target is not None else None
@@ -1526,6 +1576,26 @@ class PredictiveHeatingSupport:
             ),
             "thermal_margin_c": (plan or {}).get("thermal_margin_c"),
             "mpc_energy_kwh": (plan or {}).get("mpc_energy_kwh"),
+            "mpc_horizon_energy_kwh": (plan or {}).get(
+                "mpc_horizon_energy_kwh",
+                (plan or {}).get("mpc_energy_kwh"),
+            ),
+            "mpc_next_swim_energy_kwh": (plan or {}).get(
+                "mpc_next_swim_energy_kwh"
+            ),
+            "swim_dates": [
+                self._iso_date(item)
+                for item in ((plan or {}).get("swim_dates") or [])
+                if isinstance(item, datetime.date)
+            ],
+            "swim_opportunities": [
+                {
+                    **item,
+                    "date": self._iso_date(item.get("date")),
+                }
+                for item in ((plan or {}).get("opportunities") or [])
+                if isinstance(item, dict)
+            ],
             "mpc_night_energy_required": bool(
                 (plan or {}).get("mpc_night_energy_required")
             ),
@@ -1558,6 +1628,7 @@ class PredictiveHeatingSupport:
             attributes.get("measurement_active"),
             attributes.get("measurement_remaining_seconds"),
             attributes.get("measurement_phase"),
+            attributes.get("forced_heating_remaining_seconds"),
             attributes.get("current_cover"),
             attributes.get("target_temperature"),
             attributes.get("heating_now"),
@@ -1567,6 +1638,7 @@ class PredictiveHeatingSupport:
             attributes.get("adaptive_floor_temperature"),
             attributes.get("trajectory_target_temperature"),
             attributes.get("mpc_energy_kwh"),
+            attributes.get("swim_dates"),
             attributes.get("mpc_plan"),
             attributes.get("reason"),
             attributes.get("forecast_updated_at"),

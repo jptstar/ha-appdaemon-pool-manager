@@ -123,7 +123,7 @@ PREHEAT    -> heat today to the thermal trajectory target
 MAINTAIN   -> selected bathing day: recover/hold the requested water target
 ```
 
-The weather outlook remains visible up to 15 days, but a distant forecast does not trigger immediate heating. Pool Manager simulates future OFF / Smart / Turbo strategies against the learned pool physics, estimates their energy cost, and repeatedly chooses the lowest-energy reachable trajectory. The optimization is recalculated whenever the weather, certified water temperature or learned model changes.
+The weather outlook remains visible up to 15 days. Since v0.9, MPC no longer stops at the first selected bathing day: it jointly plans the complete available horizon and keeps every credible bathing window in the same optimization. Pool Manager simulates future OFF / Smart / Turbo strategies against the learned pool physics, estimates their energy cost, and chooses the lowest-energy trajectory that keeps those comfort windows reachable. It can therefore let the pool cool through a poor-weather gap, preheat on a more efficient warm day, or keep a little extra thermal reserve before a short cold spell. The optimization is recalculated whenever the weather, certified water temperature or learned model changes.
 
 ```yaml
 chauffage_predictif: true
@@ -136,6 +136,10 @@ chauffage_predictif_horizon_jours: 15
 chauffage_predictif_temperature_baignade_min_c: 21
 chauffage_predictif_temperature_baignade_ideale_c: 26
 chauffage_predictif_score_baignade_min: 55
+
+# Weekend preference for otherwise credible bathing weather. The bonus is
+# applied before the score threshold; minimum outdoor temperature stays hard.
+chauffage_predictif_bonus_weekend: 10
 
 # Fallbacks while the installation is still learning.
 chauffage_predictif_gain_chauffe_c_par_h: 0.30
@@ -190,13 +194,13 @@ Daily weather keeps the strategic 15-day view. When the configured weather provi
 - Saturdays and Sundays receive additional usage priority and use a broader daytime window;
 - PAC capacity uses near-term average daytime temperature instead of blindly using the daily maximum.
 
-A marginal earlier day is therefore not automatically chosen when a much better nearby weekend or late-afternoon window exists. A candidate must also be physically recoverable with the learned PAC performance.
+A marginal earlier day is therefore not automatically preferred over a much better nearby weekend or late-afternoon window. The configurable weekend bonus (10 points by default) is only a preference: a cold/bad weekend still fails the hard minimum-air-temperature gate. Since v0.9, all credible windows that remain thermally reachable are kept in the horizon plan instead of disappearing after the first selected day.
 
 ### Adaptive Thermal Model + MPC
 
 The adaptive model predicts the pool response from the data already learned by Pool Manager: PAC gain by preset/outdoor-temperature range, PAC power, passive losses, water/air delta and cover state. During a cold start, learned values are blended with conservative fallback values; as certified samples accumulate, the real installation progressively dominates the model.
 
-For every credible bathing opportunity, MPC simulates future choices such as:
+Across the complete horizon, MPC simulates future choices such as:
 
 ```text
 OFF
@@ -204,9 +208,9 @@ Smart for 1 h, 2 h, ...
 Turbo for 1 h, 2 h, ...
 ```
 
-The controller minimizes predicted PAC energy while respecting the absolute water floor and the bathing target. Turbo carries a small optimization penalty, and night heating carries a much larger one, so both are used only when they materially improve reachability.
+Every credible bathing day becomes a comfort constraint inside the same optimization. The controller minimizes predicted PAC energy while respecting the absolute water floor and all retained bathing targets. Turbo carries a small optimization penalty, and night heating carries a much larger one, so both are used only when they materially improve reachability.
 
-This makes the old fixed trajectory concept dynamic. The dashboard attribute `adaptive_floor_temperature` is the minimum water temperature that still keeps the selected MPC plan feasible from the current state. It can therefore be well above the configured absolute floor when recovery capacity is tight, and close to the absolute floor when several efficient heating opportunities remain.
+This makes the old fixed trajectory concept dynamic over the whole forecast. The top-level dashboard attribute `adaptive_floor_temperature` is the minimum current water temperature that still keeps the optimized horizon recoverable. Each daily forecast row also exposes its own `recoverability_floor`, so a dashboard can show how far the pool may economically cool before the next comfort window becomes difficult to recover.
 
 Example:
 
@@ -221,7 +225,7 @@ Tomorrow is warmer and learned Smart efficiency is better
 -> use the cheaper warm window tomorrow
 ```
 
-The MPC plan is **receding horizon**: its multi-day schedule is a forecast, not a rigid timer. Pool Manager executes only the current decision, then recalculates after new weather or a new certified pool measurement. Hydraulic safety, forced stop, freeze protection and PAC minimum flow remain deterministic and always have priority over MPC.
+The MPC plan is **receding horizon**: its 15-day schedule is a forecast, not a rigid timer. Pool Manager executes only the current decision, then recalculates after new weather or a new certified pool measurement. The published `mpc_plan` now includes the planned action, purpose, target bathing date, day/night heat hours, expected water temperatures and per-day recoverability floor. `swim_dates` and `swim_opportunities` expose the complete set of retained comfort windows. Hydraulic safety, forced stop, freeze protection and PAC minimum flow remain deterministic and always have priority over MPC.
 
 ### Summer, autumn and bad weather
 
@@ -240,6 +244,15 @@ Above that floor and without a useful bathing window, the PAC stays off. Forecas
 The real cover entity is used for learning. A cover state change immediately re-evaluates Pool Manager/MPC and invalidates a passive-loss learning interval that spans an open/close transition. Future overnight forecasts use `chauffage_predictif_volet_nuit_prevu` (default `closed` when a cover entity is configured), so an open daytime cover does not make the planner assume that every future night will also be open. The predictive dashboard exposes both `current_cover` and `expected_night_cover`.
 
 `brassage_nuit_intelligent: false` remains independent: it disables periodic night mixing, but it does not prohibit an exceptional pump + PAC recovery when the thermal trajectory genuinely requires it.
+
+### Live heating and stabilization countdowns
+
+The predictive status sensor publishes countdown values directly for dashboards:
+
+- `measurement_remaining_seconds` for certified water-temperature stabilization;
+- `forced_heating_ends_at` and `forced_heating_remaining_seconds` for forced Turbo durations.
+
+The forced-heating countdown is based on Pool Manager's own deadline (with Home Assistant `timer.finishes_at` as restart fallback), not the timer `remaining` attribute. It therefore keeps decreasing when the predictive sensor is refreshed and is suitable for Mushroom/Jinja cards.
 
 ### Pool Manager log sensor
 

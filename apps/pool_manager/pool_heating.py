@@ -96,7 +96,7 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         self.chauffage_start_preset = None
         self.chauffage_start_label = None
         self.handle_turbo_fallback = None
-
+        self.chauffage_turbo_ends_at = None
 
         super().initialize()
 
@@ -188,6 +188,7 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
     def _cancel_turbo_timer(self):
+        self.chauffage_turbo_ends_at = None
         if self.handle_turbo_fallback is not None:
             try:
                 self.cancel_timer(self.handle_turbo_fallback)
@@ -202,6 +203,9 @@ class HeatingModeMixin(PredictiveHeatingSupport):
 
     def _start_turbo_timer(self, seconds):
         self._cancel_turbo_timer()
+        self.chauffage_turbo_ends_at = datetime.datetime.now() + timedelta(
+            seconds=max(0, int(seconds))
+        )
         if self.entity_chauffage_timer:
             try:
                 self.call_service(
@@ -225,6 +229,7 @@ class HeatingModeMixin(PredictiveHeatingSupport):
             self._restore_after_turbo()
 
     def _restore_after_turbo(self):
+        self.chauffage_turbo_ends_at = None
         previous = self._get_chauffage_precedent()
         self._set_chauffage_selector(previous)
         self.log(f"PAC Turbo terminé -> chauffage {previous}", log="piscine_log")

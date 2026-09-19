@@ -305,11 +305,14 @@ def find_swim_opportunities(
     today,
     score_min=55.0,
     min_air_c=21.0,
+    weekend_bonus=10.0,
 ):
     """Return credible bathing days ordered by practical usefulness.
 
-    A marginal earlier day is not automatically preferred over a much better
-    day immediately after it. Weekends receive a moderate usage bonus.
+    Weekends are preferred, not forced: the configurable bonus is applied to
+    the usability score before the minimum-score gate, while the minimum air
+    temperature remains a hard comfort constraint. A poor/cold weekend still
+    stays out; a marginal but pleasant weekend can outrank a similar weekday.
     """
     if isinstance(today, datetime.datetime):
         today = today.date()
@@ -332,12 +335,19 @@ def find_swim_opportunities(
         if usage is None:
             usage = strategic
 
-        if temperature is None or temperature < float(min_air_c) or usage < float(score_min):
+        is_weekend = date_value.weekday() >= 5
+        bonus = max(0.0, float(weekend_bonus)) if is_weekend else 0.0
+        eligibility = usage + bonus
+
+        if (
+            temperature is None
+            or temperature < float(min_air_c)
+            or eligibility < float(score_min)
+        ):
             continue
 
-        weekend_bonus = 10.0 if date_value.weekday() >= 5 else 0.0
         distance_penalty = min(12.0, max(0, index) * 1.25)
-        utility = usage + weekend_bonus - distance_penalty
+        utility = eligibility - distance_penalty
 
         result.append(
             {
@@ -348,8 +358,10 @@ def find_swim_opportunities(
                 "score": score,
                 "strategic_score": round(strategic, 1),
                 "usage_score": round(usage, 1),
+                "eligibility_score": round(eligibility, 1),
+                "weekend_bonus": round(bonus, 1),
                 "utility": round(utility, 1),
-                "weekend": date_value.weekday() >= 5,
+                "weekend": is_weekend,
                 "confidence": day.get("confidence")
                 or forecast_horizon_profile(index)["confidence"],
                 "condition": day.get("condition"),
@@ -357,8 +369,8 @@ def find_swim_opportunities(
             }
         )
 
-    # Search a practical near-term window first; within it choose the best
-    # opportunity. This avoids waiting ten days for a tiny score improvement.
+    # Keep near-term usefulness for the primary/next opportunity, while the MPC
+    # may now optimize all credible opportunities across the full horizon.
     if not result:
         return []
     earliest_index = min(x["index"] for x in result)
@@ -367,7 +379,6 @@ def find_swim_opportunities(
     remaining = [x for x in result if x not in practical]
     remaining.sort(key=lambda x: (x["index"], -x["utility"]))
     return practical + remaining
-
 
 def ambient_bin(temperature):
     value = _number(temperature)
@@ -1135,6 +1146,7 @@ def dashboard_forecast(forecast, plan, today):
     candidate = (plan or {}).get("candidate") or {}
     selected_date = candidate.get("date")
     start_date = (plan or {}).get("recovery_start_date")
+    swim_dates = set((plan or {}).get("swim_dates") or [])
 
     mpc_items = {
         item.get("date"): item
@@ -1152,14 +1164,25 @@ def dashboard_forecast(forecast, plan, today):
 
         if has_mpc_schedule:
             heating = mpc_heat_hours > 0.0
-            preheat = bool(heating and day_date != selected_date)
+            swim = bool(mpc_item.get("swim"))
+            preheat = bool(heating and not swim)
         else:
+            swim = bool(
+                day_date in swim_dates
+                or (not swim_dates and day_date == selected_date)
+            )
             preheat = bool(
                 start_date is not None
                 and selected_date is not None
                 and start_date <= day_date < selected_date
             )
-            heating = bool(preheat or day_date == selected_date)
+            heating = bool(preheat or swim)
+
+        target_date = mpc_item.get("target_date")
+        if isinstance(target_date, datetime.datetime):
+            target_date = target_date.date()
+        if isinstance(target_date, datetime.date):
+            target_date = target_date.isoformat()
 
         rows.append(
             {
@@ -1181,15 +1204,28 @@ def dashboard_forecast(forecast, plan, today):
                 or forecast_horizon_profile(index)["confidence"],
                 "weekend": day_date.weekday() >= 5,
                 "usage_window": day.get("usage_window"),
-                "swim": day_date == selected_date,
+                "swim": swim,
+                "primary_swim": day_date == selected_date,
                 "preheat": preheat,
                 "heating": heating,
+                "mpc_action": mpc_item.get("action"),
+                "mpc_purpose": mpc_item.get("purpose"),
+                "mpc_target_date": target_date,
+                "recoverability_floor": _number(
+                    mpc_item.get("recoverability_floor")
+                ),
                 "mpc_heat_hours": round(mpc_heat_hours, 2),
+                "mpc_day_heat_hours": round(
+                    _number(mpc_item.get("day_heat_hours")) or 0.0, 2
+                ),
                 "mpc_night_heat_hours": round(mpc_night_heat_hours, 2),
                 "mpc_preset": mpc_item.get("preset"),
                 "mpc_energy_kwh": _number(mpc_item.get("energy_kwh")),
                 "predicted_water_start": _number(
                     mpc_item.get("start_temperature")
+                ),
+                "predicted_water_day_end": _number(
+                    mpc_item.get("day_end_temperature")
                 ),
                 "predicted_water_end": _number(
                     mpc_item.get("end_temperature")
@@ -1197,3 +1233,4 @@ def dashboard_forecast(forecast, plan, today):
             }
         )
     return rows
+

@@ -403,6 +403,320 @@ def _optimize_candidate(
     return best
 
 
+def _optimize_horizon(
+    *,
+    now,
+    water_c,
+    target_c,
+    swim_dates,
+    forecast,
+    model,
+    floor_c,
+    stop_margin_c,
+    day_hours,
+    today_day_hours_remaining,
+    candidate_day_hours,
+    night_hours,
+    step_h,
+    state_step_c,
+    turbo_penalty_kwh_per_h,
+    night_penalty_kwh_per_h,
+    allow_night,
+):
+    """Optimize the complete forecast horizon against every selected swim day.
+
+    The controller can deliberately coast through poor-weather gaps, preheat on
+    a more efficient warm day, and preserve only the temperature that remains
+    necessary to recover the next comfort target. Night heating is an optional
+    second-pass escape route and remains penalized.
+    """
+    today = now.date() if isinstance(now, datetime.datetime) else now
+    by_date = _forecast_by_date(forecast)
+    dates = sorted(date_value for date_value in by_date if date_value >= today)
+    if not dates:
+        return None, None
+
+    swim_dates = set(swim_dates or [])
+    state_step = max(0.05, float(state_step_c))
+    stop_margin = max(0.0, float(stop_margin_c))
+
+    states = {
+        round(float(water_c) / state_step) * state_step: {
+            "temp": float(water_c),
+            "cost": 0.0,
+            "energy_kwh": 0.0,
+            "night_heat_h": 0.0,
+            "path": [],
+        }
+    }
+
+    for index, date_value in enumerate(dates):
+        swim_day = date_value in swim_dates
+        if index == 0:
+            available_day_h = max(0.0, float(today_day_hours_remaining))
+        elif swim_day:
+            available_day_h = max(0.0, float(candidate_day_hours))
+        else:
+            available_day_h = max(0.0, float(day_hours))
+
+        night_window_h = max(0.0, float(night_hours))
+        heat_night_h = night_window_h if allow_night else 0.0
+        hour_options = _hours_options(
+            available_day_h + heat_night_h,
+            step_h,
+        )
+
+        actions = [(None, 0.0)]
+        for hours in hour_options:
+            if hours <= 0:
+                continue
+            actions.append((model.smart_preset, hours))
+            actions.append((model.turbo_preset, hours))
+
+        entry = by_date.get(date_value) or {}
+        day_air = _day_temperature(entry)
+        night_air = _night_temperature(entry)
+
+        next_states = {}
+        for record in states.values():
+            for preset, hours in actions:
+                sim = _simulate_day(
+                    model=model,
+                    start_c=record["temp"],
+                    day_air_c=day_air,
+                    night_air_c=night_air,
+                    day_window_h=available_day_h,
+                    night_window_h=night_window_h,
+                    heat_hours=hours,
+                    preset=preset or model.smart_preset,
+                    candidate_day=False,
+                )
+
+                if (
+                    swim_day
+                    and sim["day_end_c"] < float(target_c) - stop_margin
+                ):
+                    continue
+
+                end_temp = sim["end_c"]
+                if end_temp < float(floor_c) - stop_margin:
+                    continue
+
+                # A small thermal-storage headroom lets a warm/sunny day carry
+                # useful heat across a short poor-weather gap. Larger deliberate
+                # overheating would only increase losses and is rejected.
+                if max(sim["day_end_c"], end_temp) > float(target_c) + 1.0:
+                    continue
+
+                energy = record["energy_kwh"] + sim["energy_kwh"]
+                cost = record["cost"] + sim["energy_kwh"]
+                if preset and normalize_preset_name(preset) == normalize_preset_name(
+                    model.turbo_preset
+                ):
+                    cost += (
+                        sim["day_heat_h"] + sim["night_heat_h"]
+                    ) * max(0.0, float(turbo_penalty_kwh_per_h))
+                cost += sim["night_heat_h"] * max(
+                    0.0, float(night_penalty_kwh_per_h)
+                )
+
+                path_item = {
+                    "date": date_value,
+                    "swim": swim_day,
+                    "preset": preset,
+                    "heat_hours": round(float(hours), 2),
+                    "day_heat_hours": round(sim["day_heat_h"], 2),
+                    "night_heat_hours": round(sim["night_heat_h"], 2),
+                    "day_window_hours": round(available_day_h, 2),
+                    "night_window_hours": round(night_window_h, 2),
+                    "start_temperature": round(sim["start_c"], 2),
+                    "day_end_temperature": round(sim["day_end_c"], 2),
+                    "end_temperature": round(sim["end_c"], 2),
+                    "energy_kwh": round(sim["energy_kwh"], 2),
+                    "day_air_temperature": day_air,
+                    "night_air_temperature": night_air,
+                }
+                key = round(end_temp / state_step) * state_step
+                candidate_record = {
+                    "temp": end_temp,
+                    "cost": cost,
+                    "energy_kwh": energy,
+                    "night_heat_h": record["night_heat_h"] + sim["night_heat_h"],
+                    "path": record["path"] + [path_item],
+                }
+                previous = next_states.get(key)
+                if previous is None or candidate_record["cost"] < previous["cost"]:
+                    next_states[key] = candidate_record
+
+        if not next_states:
+            return None, date_value
+
+        if len(next_states) > 320:
+            ordered = sorted(
+                next_states.items(),
+                key=lambda kv: (
+                    kv[1]["cost"],
+                    abs(float(target_c) - kv[1]["temp"]),
+                ),
+            )[:320]
+            next_states = dict(ordered)
+        states = next_states
+
+    best = min(
+        states.values(),
+        key=lambda record: (
+            record["cost"],
+            record["night_heat_h"],
+            record["energy_kwh"],
+        ),
+    )
+    return best, None
+
+
+def _simulate_fixed_horizon_path(
+    *,
+    start_c,
+    path,
+    forecast,
+    model,
+    floor_c,
+    target_c,
+    stop_margin_c,
+):
+    """Replay one fixed horizon schedule from a different starting temperature."""
+    if not path:
+        return float(start_c)
+
+    by_date = _forecast_by_date(forecast)
+    temp = float(start_c)
+    stop_margin = max(0.0, float(stop_margin_c))
+
+    for item in path:
+        date_value = item["date"]
+        entry = by_date.get(date_value) or {}
+        sim = _simulate_day(
+            model=model,
+            start_c=temp,
+            day_air_c=_day_temperature(entry),
+            night_air_c=_night_temperature(entry),
+            day_window_h=float(item.get("day_window_hours") or 0.0),
+            night_window_h=float(item.get("night_window_hours") or 0.0),
+            heat_hours=float(item.get("heat_hours") or 0.0),
+            preset=item.get("preset") or model.smart_preset,
+            candidate_day=False,
+        )
+        if (
+            item.get("swim")
+            and sim["day_end_c"] < float(target_c) - stop_margin
+        ):
+            return False
+        temp = sim["end_c"]
+        if temp < float(floor_c) - stop_margin:
+            return False
+
+    return temp
+
+
+def _minimum_start_for_horizon_path(
+    *,
+    path,
+    target_c,
+    floor_c,
+    water_c,
+    forecast,
+    model,
+    stop_margin_c,
+):
+    """Minimum temperature that keeps every future comfort target recoverable."""
+    if not path:
+        return float(floor_c)
+
+    low = float(floor_c)
+    high = max(float(target_c) + 1.0, float(water_c))
+
+    # The selected schedule is known to be feasible from its planned start.
+    if _simulate_fixed_horizon_path(
+        start_c=high,
+        path=path,
+        forecast=forecast,
+        model=model,
+        floor_c=floor_c,
+        target_c=target_c,
+        stop_margin_c=stop_margin_c,
+    ) is False:
+        high = max(high, float(water_c) + 2.0)
+
+    for _ in range(18):
+        mid = (low + high) / 2.0
+        result = _simulate_fixed_horizon_path(
+            start_c=mid,
+            path=path,
+            forecast=forecast,
+            model=model,
+            floor_c=floor_c,
+            target_c=target_c,
+            stop_margin_c=stop_margin_c,
+        )
+        if result is not False:
+            high = mid
+        else:
+            low = mid
+
+    return max(float(floor_c), min(float(target_c) + 1.0, high))
+
+
+def _annotate_horizon_path(
+    *,
+    path,
+    swim_dates,
+    forecast,
+    model,
+    floor_c,
+    target_c,
+    stop_margin_c,
+):
+    """Add future target, purpose and dynamic recoverability floor per day."""
+    ordered_swims = sorted(set(swim_dates or []))
+    for index, item in enumerate(path):
+        date_value = item["date"]
+        target_date = next(
+            (d for d in ordered_swims if d >= date_value),
+            None,
+        )
+        item["target_date"] = target_date
+        item["recoverability_floor"] = round(
+            _minimum_start_for_horizon_path(
+                path=path[index:],
+                target_c=target_c,
+                floor_c=floor_c,
+                water_c=float(item.get("start_temperature") or floor_c),
+                forecast=forecast,
+                model=model,
+                stop_margin_c=stop_margin_c,
+            ),
+            2,
+        )
+
+        heat_hours = float(item.get("heat_hours") or 0.0)
+        if item.get("swim"):
+            item["action"] = "MAINTAIN"
+            item["purpose"] = "baignade"
+        elif heat_hours > 0.0 and target_date is not None:
+            item["action"] = "PREHEAT"
+            item["purpose"] = f"préparation baignade {target_date.isoformat()}"
+        elif target_date is not None:
+            item["action"] = "WAIT"
+            item["purpose"] = (
+                f"attente économique; réserve "
+                f"{item['recoverability_floor']:.1f} °C"
+            )
+        else:
+            item["action"] = "WAIT"
+            item["purpose"] = "aucun besoin thermique futur dans l'horizon"
+
+    return path
+
+
 def _simulate_fixed_path(
     *,
     start_c,
@@ -550,6 +864,7 @@ def build_mpc_plan(
     stop_margin_c=0.2,
     score_min=55.0,
     min_air_c=21.0,
+    weekend_bonus=10.0,
     smart_preset="Smart",
     turbo_preset="Turbo",
     day_hours=12.0,
@@ -565,7 +880,14 @@ def build_mpc_plan(
     turbo_penalty_kwh_per_h=0.08,
     night_penalty_kwh_per_h=0.35,
 ):
-    """Build an adaptive receding-horizon energy-minimizing thermal plan."""
+    """Build a full-horizon adaptive energy-minimizing thermal plan.
+
+    Every credible bathing opportunity in the available weather horizon is
+    considered, not just the first one. The optimizer may let the pool cool
+    through poor-weather gaps, preheat on thermally efficient days, and retain
+    only the temperature reserve required to make later comfort windows
+    recoverable.
+    """
     today = now.date() if isinstance(now, datetime.datetime) else now
     water = float(water_c)
     target = float(target_c)
@@ -593,10 +915,9 @@ def build_mpc_plan(
         today,
         score_min=score_min,
         min_air_c=min_air_c,
+        weekend_bonus=weekend_bonus,
     )
 
-    # Keep the established floor behavior when there is no useful bathing
-    # opportunity.  v0.8 changes the recovery planner, not the safety reserve.
     if not opportunities:
         fallback = build_predictive_plan(
             now=now,
@@ -628,24 +949,26 @@ def build_mpc_plan(
             model_confidence=confidence,
             adaptive_floor_c=round(floor_c, 2),
             mpc_energy_kwh=0.0,
+            mpc_horizon_energy_kwh=0.0,
             mpc_night_energy_required=False,
             mpc_plan=[],
+            swim_dates=[],
+            opportunities=[],
         )
         return fallback
 
-    selected_candidate = None
+    # Optimize all credible comfort windows. If one particular target is
+    # physically unreachable even with exceptional night heating, discard only
+    # that failed target and preserve the rest of the horizon.
+    active_swim_dates = sorted({item["date"] for item in opportunities})
     optimized = None
     used_night = False
-
-    # Preserve the practical weather/usage ranking.  For each credible window,
-    # first search a daytime-only energy optimum.  Night heating is admitted
-    # only when no daytime solution can make that same opportunity reachable.
-    for candidate in opportunities:
-        optimized = _optimize_candidate(
+    while active_swim_dates:
+        optimized, failed_date = _optimize_horizon(
             now=now,
             water_c=water,
             target_c=target,
-            candidate=candidate,
+            swim_dates=active_swim_dates,
             forecast=forecast,
             model=model,
             floor_c=floor_c,
@@ -660,12 +983,13 @@ def build_mpc_plan(
             night_penalty_kwh_per_h=night_penalty_kwh_per_h,
             allow_night=False,
         )
+        used_night = False
         if optimized is None:
-            optimized = _optimize_candidate(
+            optimized, night_failed_date = _optimize_horizon(
                 now=now,
                 water_c=water,
                 target_c=target,
-                candidate=candidate,
+                swim_dates=active_swim_dates,
                 forecast=forecast,
                 model=model,
                 floor_c=floor_c,
@@ -681,12 +1005,18 @@ def build_mpc_plan(
                 allow_night=True,
             )
             used_night = optimized is not None
+            if optimized is None:
+                failed_date = night_failed_date or failed_date
+
         if optimized is not None:
-            selected_candidate = candidate
             break
 
-    if optimized is None or selected_candidate is None:
-        # No thermally feasible candidate: reuse conservative floor protection.
+        if failed_date in active_swim_dates:
+            active_swim_dates.remove(failed_date)
+        else:
+            break
+
+    if optimized is None or not active_swim_dates:
         fallback = build_predictive_plan(
             now=now,
             water_c=water,
@@ -717,41 +1047,54 @@ def build_mpc_plan(
             model_confidence=confidence,
             adaptive_floor_c=round(floor_c, 2),
             mpc_energy_kwh=0.0,
+            mpc_horizon_energy_kwh=0.0,
             mpc_night_energy_required=False,
             mpc_plan=[],
+            swim_dates=[],
+            opportunities=opportunities,
             reason="aucune fenêtre baignade thermiquement atteignable; réserve minimale",
         )
         return fallback
 
-    path = optimized["path"]
+    path = _annotate_horizon_path(
+        path=optimized["path"],
+        swim_dates=active_swim_dates,
+        forecast=forecast,
+        model=model,
+        floor_c=floor_c,
+        target_c=target,
+        stop_margin_c=stop_margin_c,
+    )
     first = path[0]
+
+    # Primary candidate remains the next chronological comfort window; all later
+    # targets stay visible and constrained in the same MPC plan.
+    first_swim_date = min(active_swim_dates)
+    selected_candidate = next(
+        (
+            item
+            for item in opportunities
+            if item.get("date") == first_swim_date
+        ),
+        None,
+    )
+    if selected_candidate is None:
+        selected_candidate = {"date": first_swim_date}
+
     recovery_start = next(
         (
             item["date"]
             for item in path
-            if float(item.get("heat_hours") or 0.0) > 0.0
+            if item["date"] <= first_swim_date
+            and float(item.get("heat_hours") or 0.0) > 0.0
         ),
-        selected_candidate["date"],
-    )
-
-    adaptive_floor = _minimum_start_for_path(
-        path=path,
-        target_c=target,
-        floor_c=floor_c,
-        water_c=water,
-        forecast=forecast,
-        model=model,
-        day_hours=day_hours,
-        today_day_hours_remaining=today_day_hours_remaining,
-        candidate_day_hours=candidate_day_hours,
-        night_hours=night_hours,
-        stop_margin_c=stop_margin_c,
+        first_swim_date,
     )
 
     no_heat_loss, projected_no_heat = _project_no_heat(
         now=now,
         water_c=water,
-        candidate_date=selected_candidate["date"],
+        candidate_date=first_swim_date,
         forecast=forecast,
         model=model,
         day_hours=day_hours,
@@ -760,12 +1103,13 @@ def build_mpc_plan(
         night_hours=night_hours,
     )
 
+    adaptive_floor = float(first.get("recoverability_floor") or floor_c)
     heat_today_h = float(first.get("day_heat_hours") or 0.0)
     night_today_h = float(first.get("night_heat_hours") or 0.0)
     current_heat_h = heat_today_h if daylight_active else night_today_h
     should_heat = current_heat_h > 0.0
 
-    if selected_candidate["date"] == today:
+    if first.get("swim"):
         action = "MAINTAIN"
     elif should_heat:
         action = "PREHEAT"
@@ -779,36 +1123,40 @@ def build_mpc_plan(
     if should_heat and daylight_active:
         heat_target = max(
             adaptive_floor,
-            min(target, float(first.get("day_end_temperature") or target)),
+            min(target + 1.0, float(first.get("day_end_temperature") or target)),
         )
     elif should_heat:
         heat_target = max(
             adaptive_floor,
-            min(target, float(first.get("end_temperature") or target)),
+            min(target + 1.0, float(first.get("end_temperature") or target)),
         )
     else:
         heat_target = None
 
-    # v0.8 gives the dashboard margin a physical meaning: how many real water
-    # degrees currently separate the pool from the adaptive recoverability
-    # floor. A negative value means the optimized trajectory already requires
-    # recovery now.
     required_gain = max(0.0, target - projected_no_heat)
     thermal_margin = water - adaptive_floor
+    next_swim_energy = sum(
+        float(item.get("energy_kwh") or 0.0)
+        for item in path
+        if item["date"] <= first_swim_date
+    )
 
     reason = (
-        f"MPC énergie minimale vers {selected_candidate['date'].isoformat()}; "
+        f"MPC horizon {len(path)} j; "
+        f"{len(active_swim_dates)} fenêtre(s) baignade; "
         f"{optimized['energy_kwh']:.1f} kWh prévus"
     )
-    if used_night:
-        reason += "; nuit exceptionnelle requise"
-    elif not should_heat:
-        reason += f"; attente, réserve adaptative {adaptive_floor:.1f} °C"
+    if should_heat:
+        reason += (
+            f"; aujourd'hui {current_heat_h:.1f} h {preset} équiv. "
+            f"pour {first.get('target_date')}"
+        )
     else:
         reason += (
-            f"; aujourd'hui {current_heat_h:.1f} h {preset} équiv., "
-            f"cible {heat_target:.1f} °C"
+            f"; attente, réserve récupérabilité {adaptive_floor:.1f} °C"
         )
+    if used_night:
+        reason += "; chauffe nocturne exceptionnelle nécessaire"
 
     return {
         "planner": "MPC",
@@ -818,7 +1166,9 @@ def build_mpc_plan(
         "should_heat": should_heat,
         "heat_target_c": round(heat_target, 2) if heat_target is not None else None,
         "preset": preset,
-        "night_heating": bool(should_heat and not daylight_active and night_today_h > 0),
+        "night_heating": bool(
+            should_heat and not daylight_active and night_today_h > 0
+        ),
         "night_required_c": 0.0,
         "floor_c": round(floor_c, 2),
         "floor_target_c": round(
@@ -828,6 +1178,7 @@ def build_mpc_plan(
         "adaptive_floor_c": round(adaptive_floor, 2),
         "candidate": selected_candidate,
         "opportunities": opportunities,
+        "swim_dates": active_swim_dates,
         "recovery_start_date": recovery_start,
         "trajectory_target_c": round(
             heat_target if should_heat and heat_target is not None else adaptive_floor,
@@ -839,7 +1190,10 @@ def build_mpc_plan(
         "future_smart_capacity_c": None,
         "thermal_margin_c": round(thermal_margin, 2),
         "mpc_energy_kwh": round(optimized["energy_kwh"], 2),
+        "mpc_horizon_energy_kwh": round(optimized["energy_kwh"], 2),
+        "mpc_next_swim_energy_kwh": round(next_swim_energy, 2),
         "mpc_night_energy_required": bool(used_night),
         "mpc_plan": path,
         "reason": reason,
     }
+

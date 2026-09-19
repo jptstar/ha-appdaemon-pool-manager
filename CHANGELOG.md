@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.0 - Full-horizon comfort and energy planning
+
+- Extend predictive heating from a single next-bathing target to a joint MPC plan across the complete available weather horizon (up to 15 days).
+- Keep every credible bathing window in the optimization so the controller can prepare for later good days even after an earlier bathing day has passed.
+- Let the optimizer deliberately coast through poor-weather gaps when reheating later is cheaper, while preserving a dynamic recoverability floor high enough to keep future comfort targets reachable.
+- Allow limited thermal storage (up to 1 °C above the normal target in the search) when an efficient warm-day heating window can economically carry heat across a short bad-weather interval.
+- Prefer daytime heating; exceptional night heating is considered only when the same multi-window comfort plan is otherwise infeasible and remains explicitly penalized.
+- Apply the configurable weekend preference before the bathing-score threshold with `chauffage_predictif_bonus_weekend` (default 10): weekends are preferred, never forced, and the minimum outdoor bathing temperature remains mandatory.
+- Enrich each `mpc_plan` / dashboard forecast row with `swim`, `action`, `purpose`, `target_date`, `recoverability_floor`, day/night heat hours and predicted water temperatures.
+- Expose `swim_dates`, `swim_opportunities`, `mpc_horizon_energy_kwh` and `mpc_next_swim_energy_kwh` on the predictive Home Assistant sensor.
+- Expose a live forced-heating countdown through `forced_heating_ends_at` and `forced_heating_remaining_seconds`; this avoids relying on Home Assistant timer `remaining`, which is not a live countdown.
+- Keep the certified-temperature stabilization countdown through `measurement_remaining_seconds`.
+- No new Home Assistant helper is required.
+
 ## 0.8.3 - Bounded temperature calibration and Turbo handover
 
 - Fix certified temperature calibration that could remain active indefinitely when pump-speed telemetry dipped below the 70% reference: once the reference speed has been confirmed, the calibration clock is monotonic and is never restarted by later transient speed reports.

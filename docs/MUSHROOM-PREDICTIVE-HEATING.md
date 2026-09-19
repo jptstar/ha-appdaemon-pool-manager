@@ -20,7 +20,7 @@ The v0.8 adaptive planner publishes a **current thermal decision** plus an energ
 - `recommended_preset`: Smart/Turbo choice for the current action;
 - `night_heating`: true only for an exceptional night recovery;
 - `night_required_c`: missing recovery that cannot be covered during daytime;
-- `thermal_margin_c`: compatibility recovery margin diagnostic;
+- `thermal_margin_c`: real current-water margin above the adaptive recoverability floor (negative means recovery is already required);
 - `mpc_energy_kwh`: predicted PAC energy for the selected recovery plan;
 - `mpc_night_energy_required`: whether the optimizer had to admit exceptional night heating;
 - `mpc_plan`: predicted day-by-day OFF/Smart/Turbo hours, temperatures and energy;

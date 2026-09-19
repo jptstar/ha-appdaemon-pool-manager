@@ -295,3 +295,36 @@ def test_wait_stops_active_pac_immediately_and_keeps_measurement_pump_only(tmp_p
         app.chauffage_predictif_measurement_purpose
         == "temperature_stabilization"
     )
+
+def test_predictive_score_sensor_uses_usage_score_and_exposes_threshold(tmp_path):
+    app = _make_runtime(tmp_path)
+    app.entity_chauffage_predictif_score = "sensor.piscine_score_baignade"
+    app.chauffage_predictif_score_baignade_min = 55.0
+    calls = []
+    app.set_state = lambda entity, **kwargs: calls.append((entity, kwargs))
+    app._recover = lambda *args, **kwargs: None
+    app._fault = lambda *args, **kwargs: None
+
+    app._publish_predictive_score(
+        {
+            "candidate": {
+                "date": datetime.date(2026, 9, 20),
+                "score": 61.0,
+                "strategic_score": 64.5,
+                "usage_score": 72.0,
+                "weekend": True,
+                "usage_window": "daytime",
+                "confidence": "high",
+            }
+        }
+    )
+
+    assert calls
+    entity, payload = calls[-1]
+    assert entity == "sensor.piscine_score_baignade"
+    assert payload["state"] == 72.0
+    assert payload["attributes"]["minimum_score"] == 55.0
+    assert payload["attributes"]["weather_score"] == 61.0
+    assert payload["attributes"]["strategic_score"] == 64.5
+    assert payload["attributes"]["date"] == "2026-09-20"
+

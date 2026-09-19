@@ -50,3 +50,33 @@ def test_heating_mode_set_contains_every_supported_option():
     assert module.CHAUFFAGE_PREMIERE_CHAUFFE in module.CHAUFFAGE_MODES
     assert module.CHAUFFAGE_FIN_SAISON in module.CHAUFFAGE_MODES
     assert set(module.TURBO_DURATIONS_H).issubset(module.CHAUFFAGE_MODES)
+
+def test_leaving_forced_turbo_releases_physical_preset_immediately():
+    app = object.__new__(module.HeatingModeMixin)
+    app.chauffage_predictif = True
+    app.chauffage_preset_smart = "Smart"
+    app.chauffage_predictif_forecast_at = object()
+    app.chauffage_predictif_last_log_signature = object()
+    app.chauffage_predictif_heat_requested = False
+    app.chauffage_predictif_heat_target_c = None
+    app.chauffage_predictif_last_plan = None
+    app.chauffage_predictif_measurement_active = False
+
+    calls = []
+    app._cancel_turbo_timer = lambda: calls.append(("cancel_turbo",))
+    app._set_pac_preset = lambda preset: calls.append(("preset", preset)) or True
+    app._cancel_chauffage_start = lambda: calls.append(("cancel_start",))
+    app.safety_tick = lambda kwargs: calls.append(("safety_tick",))
+
+    app.change_chauffage_mode(
+        "input_select.piscine_chauffage",
+        "state",
+        "Turbo • 6 h",
+        "Automatique",
+        {},
+    )
+
+    assert ("cancel_turbo",) in calls
+    assert ("preset", "Smart") in calls
+    assert ("safety_tick",) in calls
+

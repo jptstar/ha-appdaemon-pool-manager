@@ -258,7 +258,7 @@ If `entity_chauffage_predictif_status` is configured, useful attributes now incl
 - `recommended_preset`
 - `night_heating`
 - `night_required_c`
-- `thermal_margin_c`
+- `thermal_margin_c` (current water minus adaptive floor in MPC mode)
 - `required_gain_c`
 - `predicted_night_loss_c`
 - `mpc_energy_kwh`

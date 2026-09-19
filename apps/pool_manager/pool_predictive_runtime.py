@@ -70,6 +70,10 @@ class PredictiveHeatingSupport:
         self.entity_chauffage_predictif_status = self.args.get(
             "entity_chauffage_predictif_status"
         )
+        self.entity_chauffage_predictif_score = self.args.get(
+            "entity_chauffage_predictif_score",
+            "sensor.piscine_score_baignade",
+        )
 
         self.chauffage_predictif_horizon_jours = max(
             3,
@@ -1231,6 +1235,54 @@ class PredictiveHeatingSupport:
             return "⏸ Fin de saison"
         return "⏸ Veille météo"
 
+    def _publish_predictive_score(self, plan):
+        """Publish the selected bathing opportunity score as a HA sensor."""
+        entity = getattr(self, "entity_chauffage_predictif_score", None)
+        if not entity:
+            return
+
+        candidate = (plan or {}).get("candidate") or {}
+        usage_score = candidate.get("usage_score")
+        try:
+            state = (
+                round(float(usage_score), 1)
+                if usage_score is not None
+                else "unknown"
+            )
+        except (TypeError, ValueError):
+            state = "unknown"
+
+        attributes = {
+            "friendly_name": "Piscine • Score baignade",
+            "icon": "mdi:star-outline",
+            "score_type": "usage_score",
+            "minimum_score": round(
+                float(self.chauffage_predictif_score_baignade_min),
+                1,
+            ),
+            "date": self._iso_date(candidate.get("date")),
+            "usage_score": candidate.get("usage_score"),
+            "weather_score": candidate.get("score"),
+            "strategic_score": candidate.get("strategic_score"),
+            "weekend": candidate.get("weekend"),
+            "usage_window": candidate.get("usage_window"),
+            "confidence": candidate.get("confidence"),
+        }
+
+        try:
+            self.set_state(
+                entity,
+                state=state,
+                attributes=attributes,
+                replace=True,
+            )
+            self._recover("chauffage_predictif_score")
+        except Exception as exc:
+            self._fault(
+                "chauffage_predictif_score",
+                f"publication score baignade impossible: {exc}",
+            )
+
     def _publish_predictive_status(
         self,
         *,
@@ -1241,6 +1293,8 @@ class PredictiveHeatingSupport:
         target,
         override=None,
     ):
+        self._publish_predictive_score(plan)
+
         if not self.entity_chauffage_predictif_status:
             return
 

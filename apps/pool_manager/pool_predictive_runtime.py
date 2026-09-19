@@ -747,17 +747,7 @@ class PredictiveHeatingSupport:
         now = now or datetime.datetime.now()
 
         if not self.pompe_est_on():
-            # No pending autonomous measurement survives a pump stop.
             self._reset_measurement_tracker()
-            return False
-
-        # The shared filtration timer is the sole hydraulic stabilization gate.
-        # Until tempo_eau has elapsed, the physical pipe probe is not considered
-        # representative of the pool.
-        if not bool(getattr(self, "fin_tempo", 0)):
-            if not self.chauffage_predictif_measurement_active:
-                self.chauffage_predictif_measurement_active = True
-                self.chauffage_predictif_measurement_purpose = "startup_stabilization"
             return False
 
         speed = self.get_fan_percentage()
@@ -766,16 +756,10 @@ class PredictiveHeatingSupport:
             return False
 
         minimum = self.chauffage_predictif_mesure_vitesse_pct
-        if speed < minimum:
-            # Calibration owns only the minimum required speed. It never reduces
-            # a higher automatic speed.
-            try:
-                self.set_pump_percentage(minimum, force=True)
-                speed = minimum
-            except Exception:
-                self._reset_measurement_tracker()
-                return False
 
+        # A new pump run needs one certified calibration. Calibration owns only
+        # a temporary minimum: if automatic control is already >= minimum, keep
+        # that speed; otherwise raise it to the minimum.
         last_start = getattr(self, "last_pompe_on", None)
         certified_at = self.chauffage_predictif_certified_at
         new_run_needs_sample = certified_at is None
@@ -785,18 +769,48 @@ class PredictiveHeatingSupport:
             except TypeError:
                 new_run_needs_sample = True
 
-        # First stable circulation of a new pump run becomes the natural
-        # certified sample. Additional samples may still be explicitly requested
-        # for thermal learning while the pump is already running; neither case
-        # changes speed or extends circulation.
         if (
             not self.chauffage_predictif_measurement_active
             and new_run_needs_sample
         ):
             self.chauffage_predictif_measurement_active = True
-            self.chauffage_predictif_measurement_purpose = "natural_mixing"
+            self.chauffage_predictif_measurement_purpose = "startup_calibration"
+            self.chauffage_predictif_measurement_previous_speed = int(speed)
+            self.chauffage_predictif_measurement_started_at = now
 
         if not self.chauffage_predictif_measurement_active:
+            return False
+
+        if speed < minimum:
+            try:
+                self.set_pump_percentage(minimum, force=True)
+                speed = minimum
+                # The stabilization clock starts when the required hydraulic
+                # speed is actually established, not merely when the pump starts.
+                self.chauffage_predictif_measurement_started_at = now
+            except Exception:
+                self._reset_measurement_tracker()
+                return False
+        elif self.chauffage_predictif_measurement_started_at is None:
+            self.chauffage_predictif_measurement_started_at = now
+
+        # Keep the normal pump-start delay as a safety gate, then additionally
+        # require a full calibration delay at >= the reference speed.
+        if not bool(getattr(self, "fin_tempo", 0)):
+            return False
+
+        try:
+            tempo_eau = max(
+                0,
+                int(float(self.get_state(self.args["tempo_eau"]))),
+            )
+        except Exception:
+            tempo_eau = 0
+
+        elapsed = (
+            now - self.chauffage_predictif_measurement_started_at
+        ).total_seconds()
+        if elapsed < tempo_eau:
             return False
 
         water = self._predictive_physical_water_raw()

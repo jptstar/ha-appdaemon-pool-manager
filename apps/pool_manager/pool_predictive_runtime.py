@@ -661,30 +661,23 @@ class PredictiveHeatingSupport:
             self.chauffage_predictif_measurement_purpose = None
 
     def _request_predictive_measurement(self, purpose, start_pump=False):
+        """Use an already justified circulation cycle for temperature sampling.
+
+        A predictive measurement must never start the pump by itself and must
+        never alter pump speed. Hydraulic stabilization belongs to the normal
+        pump-start path (tempo_eau).
+        """
         if not self.chauffage_predictif:
             return False
         if self.arret_force_actif():
+            return False
+        if not self.pompe_est_on():
             return False
 
         if not self.chauffage_predictif_measurement_active:
             self.chauffage_predictif_measurement_active = True
             self.chauffage_predictif_measurement_purpose = str(purpose)
             self._reset_measurement_tracker(keep_request=True)
-
-        if start_pump and not self.pompe_est_on():
-            try:
-                self.turn_on_pompe_mem()
-            except Exception:
-                return False
-
-        if self.pompe_est_on():
-            try:
-                self.set_pump_percentage(
-                    self.chauffage_predictif_mesure_vitesse_pct,
-                    force=True,
-                )
-            except Exception:
-                pass
         return True
 
     def _register_certified_measurement(self, now, water):
@@ -727,75 +720,46 @@ class PredictiveHeatingSupport:
 
     def _update_certified_measurement(self, now=None):
         now = now or datetime.datetime.now()
-        pump_on = self.pompe_est_on()
-        speed = self.get_fan_percentage() if pump_on else None
 
-        # Normal filtration at/above reference speed can certify temperature
-        # automatically without creating a special measurement cycle.
+        if not self.pompe_est_on():
+            # No pending autonomous measurement survives a pump stop.
+            self._reset_measurement_tracker()
+            return False
+
+        # The shared filtration timer is the sole hydraulic stabilization gate.
+        # Until tempo_eau has elapsed, the physical pipe probe is not considered
+        # representative of the pool.
+        if not bool(getattr(self, "fin_tempo", 0)):
+            if not self.chauffage_predictif_measurement_active:
+                self.chauffage_predictif_measurement_active = True
+                self.chauffage_predictif_measurement_purpose = "startup_stabilization"
+            return False
+
+        last_start = getattr(self, "last_pompe_on", None)
+        certified_at = self.chauffage_predictif_certified_at
+        new_run_needs_sample = certified_at is None
+        if last_start is not None and certified_at is not None:
+            try:
+                new_run_needs_sample = certified_at < last_start
+            except TypeError:
+                new_run_needs_sample = True
+
+        # First stable circulation of a new pump run becomes the natural
+        # certified sample. Additional samples may still be explicitly requested
+        # for thermal learning while the pump is already running; neither case
+        # changes speed or extends circulation.
         if (
             not self.chauffage_predictif_measurement_active
-            and pump_on
-            and speed is not None
-            and speed >= self.chauffage_predictif_mesure_vitesse_pct
+            and new_run_needs_sample
         ):
             self.chauffage_predictif_measurement_active = True
             self.chauffage_predictif_measurement_purpose = "natural_mixing"
 
         if not self.chauffage_predictif_measurement_active:
-            self._reset_measurement_tracker()
-            return False
-
-        if not pump_on:
-            self._reset_measurement_tracker(keep_request=True)
-            return False
-
-        # While an explicit measurement is active, all lower pump commands are
-        # clamped in DevicesMixin. Reassert here as a second line of defence.
-        if speed is None or speed < self.chauffage_predictif_mesure_vitesse_pct:
-            try:
-                self.set_pump_percentage(
-                    self.chauffage_predictif_mesure_vitesse_pct,
-                    force=True,
-                )
-            except Exception:
-                pass
-            self._reset_measurement_tracker(keep_request=True)
-            return False
-
-        if self.chauffage_predictif_measurement_started_at is None:
-            self.chauffage_predictif_measurement_started_at = now
-            return False
-
-        elapsed = (
-            now - self.chauffage_predictif_measurement_started_at
-        ).total_seconds()
-        if elapsed < self.chauffage_predictif_mesure_tempo_s:
             return False
 
         water = self._predictive_physical_water_raw()
         if water is None:
-            return False
-
-        if self.chauffage_predictif_measurement_stable_at is None:
-            self.chauffage_predictif_measurement_stable_at = now
-            self.chauffage_predictif_measurement_stable_temp = float(water)
-            return False
-
-        if (
-            abs(
-                float(water)
-                - float(self.chauffage_predictif_measurement_stable_temp)
-            )
-            > self.chauffage_predictif_mesure_variation_max_c
-        ):
-            self.chauffage_predictif_measurement_stable_at = now
-            self.chauffage_predictif_measurement_stable_temp = float(water)
-            return False
-
-        stable_s = (
-            now - self.chauffage_predictif_measurement_stable_at
-        ).total_seconds()
-        if stable_s < self.chauffage_predictif_mesure_stabilite_s:
             return False
 
         self._register_certified_measurement(now, float(water))
@@ -1482,10 +1446,9 @@ class PredictiveHeatingSupport:
         )
         self.chauffage_predictif_last_plan = plan
 
-        # WAIT/PRESERVE-without-heat must stop the PAC immediately. Learning or
-        # temperature certification is never a reason to keep producing heat.
-        # An already requested measurement may continue with pump circulation
-        # only; the 70% clamp is handled by the pump/measurement layer.
+        # WAIT/PRESERVE-without-heat must stop the PAC immediately. Temperature
+        # sampling only piggybacks on circulation that is already running; it
+        # never owns pump speed and never creates an autonomous pump cycle.
         if not plan.get("should_heat"):
             self.chauffage_predictif_heat_requested = False
             self.chauffage_predictif_heat_target_c = None
@@ -1521,26 +1484,26 @@ class PredictiveHeatingSupport:
             )
             return
 
-        # A real heat request may need a fresh certified pool temperature before
-        # the PAC is allowed to start or continue.
+        # A real heat request may need a fresh pool temperature. Starting the
+        # circulation is allowed here because heating itself requires flow; the
+        # measurement is never allowed to create an independent pump cycle.
         self._maybe_measure_during_normal_filtration(plan)
 
         if self._measurement_required_before_action(plan):
-            self.chauffage_predictif_heat_requested = False
-            self.chauffage_predictif_heat_target_c = None
-            self._cancel_chauffage_start()
+            self.chauffage_predictif_heat_requested = True
+            self.chauffage_predictif_heat_target_c = (
+                plan.get("heat_target_c") or target
+            )
 
-            # If the PAC happened to be active from the previous decision, stop
-            # it before the certification cycle: measurement must be pump-only.
-            if self._pac_power_active():
-                self._pac_off(
-                    "chauffage prédictif: mesure certifiée avant décision",
-                    post=True,
-                )
+            if not self.pompe_est_on():
+                try:
+                    self.turn_on_pompe_mem()
+                except Exception:
+                    pass
 
             self._request_predictive_measurement(
                 "decision",
-                start_pump=True,
+                start_pump=False,
             )
             self._publish_predictive_status(
                 plan=plan,
@@ -1548,7 +1511,7 @@ class PredictiveHeatingSupport:
                 kind=kind,
                 water=water,
                 target=target,
-                override="🌀 Stabilisation mesure température",
+                override="🌀 Stabilisation température au démarrage",
             )
             return
 

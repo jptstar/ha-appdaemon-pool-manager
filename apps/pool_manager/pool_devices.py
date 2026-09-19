@@ -103,27 +103,58 @@ class DevicesMixin:
 
     def set_pump_percentage(self, percentage, force=False):
         percentage = int(max(0, min(100, percentage)))
-
-        # A predictive certified-water measurement is a short, explicit
-        # hydraulic reference cycle. While it is active no lower strategy
-        # command may pull the pump below the configured mixing speed.
-        if getattr(self, "chauffage_predictif_measurement_active", False):
-            percentage = max(
-                percentage,
-                int(
+        measurement_active = bool(
+            getattr(self, "chauffage_predictif_measurement_active", False)
+        )
+        measurement_speed = int(
+            max(
+                0,
+                min(
+                    100,
                     getattr(
                         self,
                         "chauffage_predictif_mesure_vitesse_pct",
                         70,
-                    )
+                    ),
                 ),
             )
+        )
 
         now = datetime.datetime.now()
 
         current = self.get_fan_percentage()
         if current is None:
-            current = self.derniere_vitesse_commande if self.derniere_vitesse_commande is not None else percentage
+            current = (
+                self.derniere_vitesse_commande
+                if self.derniere_vitesse_commande is not None
+                else percentage
+            )
+
+        # Certified predictive measurement is a short hydraulic reference cycle,
+        # not a minimum-speed request. Lock the pump to the configured reference
+        # speed exactly (70% by default), even if another strategy currently asks
+        # for 80/90/100%. The cycle is deliberately brief and predictive modes
+        # cancel it on forced stop / incompatible mode changes.
+        if measurement_active:
+            percentage = measurement_speed
+            if current == percentage:
+                return current
+            try:
+                self.call_service(
+                    "fan/set_percentage",
+                    entity_id=self.args["fan_variateur_pompe"],
+                    percentage=percentage,
+                )
+                self.derniere_vitesse_commande = percentage
+                self.last_changement_vitesse = now
+                self.maj_electrolyseur()
+                return percentage
+            except Exception as e:
+                self.log(
+                    f"⚠️ Erreur verrouillage mesure pompe : {e}",
+                    log="piscine_log",
+                )
+                return current
 
         if not force and abs(percentage - current) < self.delta_vitesse_min:
             return current

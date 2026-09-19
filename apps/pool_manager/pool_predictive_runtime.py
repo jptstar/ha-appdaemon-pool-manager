@@ -1118,7 +1118,7 @@ class PredictiveHeatingSupport:
         if override:
             return override
         if self.chauffage_predictif_measurement_active:
-            return "🌀 Stabil. mesure température"
+            return "🌀 Stabilisation mesure température"
         action = (plan or {}).get("action")
         if action == "PREHEAT":
             return f"🔥 Préparation {(plan or {}).get('preset') or 'Smart'}"
@@ -1444,7 +1444,7 @@ class PredictiveHeatingSupport:
                 kind=kind,
                 water=water,
                 target=target,
-                override="🌀 Stabil. mesure température",
+                override="🌀 Stabilisation mesure température",
             )
             return
 

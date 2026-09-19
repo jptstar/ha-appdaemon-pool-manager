@@ -130,6 +130,7 @@ chauffage_predictif: true
 chauffage_predictif_mpc: true
 entity_meteo_chauffage_predictif: weather.home
 entity_chauffage_predictif_status: sensor.pool_predictive_heating
+entity_chauffage_predictif_score: sensor.piscine_score_baignade
 chauffage_predictif_horizon_jours: 15
 
 chauffage_predictif_temperature_baignade_min_c: 21
@@ -247,6 +248,16 @@ entity_pool_manager_log: sensor.pool_manager_log
 ```
 
 No Home Assistant helper is required. The entity state contains the latest event; attributes expose its timestamp, category, complete message and the last 20 events in `history`.
+
+### Bathing score sensor
+
+Pool Manager also publishes the selected bathing opportunity as a dedicated virtual Home Assistant sensor. By default:
+
+```yaml
+entity_chauffage_predictif_score: sensor.piscine_score_baignade
+```
+
+No Home Assistant helper is required. The sensor state is the selected opportunity's `usage_score`, which is the score actually compared with `chauffage_predictif_score_baignade_min` (55 by default). Its attributes expose `minimum_score`, `date`, `weather_score`, `strategic_score`, `usage_score`, `weekend`, `usage_window` and `confidence`. When no bathing opportunity is currently selected, the state is `unknown`.
 
 ### Dashboard sensor
 

@@ -1331,6 +1331,7 @@ class PredictiveHeatingSupport:
             attributes.get("adaptive_floor_temperature"),
             attributes.get("trajectory_target_temperature"),
             attributes.get("mpc_energy_kwh"),
+            attributes.get("mpc_plan"),
             attributes.get("reason"),
             attributes.get("forecast_updated_at"),
         )

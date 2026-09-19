@@ -116,8 +116,6 @@ pool_manager:
   # Stabilization is shared with the normal pump-start delay (tempo_eau).
   # Predictive sampling never starts an autonomous circulation cycle and never
   # overrides pump speed merely to obtain a temperature.
-  chauffage_predictif_mesure_stabilite_s: 120
-  chauffage_predictif_mesure_variation_max_c: 0.15
   chauffage_predictif_mesure_fraiche_s: 21600
 
   # During a long PAC run, request another certified sample every 2 hours so

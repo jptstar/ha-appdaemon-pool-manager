@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.2 - Predictive WAIT safety and diagnostic cleanup
+
+- Stop the PAC immediately when the adaptive planner returns `WAIT` or another no-heat decision; thermal learning and certification may keep pump circulation only, never unnecessary heat production.
+- Convert an in-progress `heating_learning` / `target_check` measurement into pump-only temperature stabilization after the PAC is stopped.
+- Keep the configured 70% / 15-minute certified-measurement cycle available without using PAC heat as a prerequisite.
+- Replace the predictive virtual sensor attribute set atomically so obsolete v0.6.x diagnostics such as `schedule`, `heating_slots`, `ready_by` and `swim_datetime` disappear after update.
+- Rename the measurement status to `🌀 Stabil. mesure température` for a clearer dashboard message.
+
+
 ## 0.7.1 - Certified adaptive thermal decisions
 
 - Replace the remaining day-capacity scheduler semantics with a decisive daily action model: `WAIT`, `PRESERVE`, `PREHEAT` or `MAINTAIN`.

@@ -27,7 +27,7 @@ secondary: >-
    · 🏊 {{ swim }}{% if start %} · reprise {{ start }}{% endif %}
   {% endif %}
   {% if state_attr(e, 'measurement_active') %}
-   · 🌀 mesure 70%
+   · 🌀 Stabil. mesure température
   {% elif state_attr(e, 'heating_now') %}
    · 🔥 {{ preset or 'Smart' }}{% if night %} 🌙{% endif %}
   {% elif action %}

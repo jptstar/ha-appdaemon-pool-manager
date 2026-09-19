@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.8.0 - Adaptive Thermal Model + MPC
+
+- Add a receding-horizon Model Predictive Controller (MPC) for predictive pool heating, enabled by default with `chauffage_predictif_mpc: true`.
+- Reuse the persistent certified thermal-learning model as an adaptive plant model: learned Smart/Turbo gain, learned PAC power, passive loss, water/air delta and cover state are blended with cold-start fallbacks.
+- Simulate future OFF / Smart / Turbo strategies and minimize predicted PAC energy while respecting the absolute water floor and selected bathing target.
+- Prefer efficient future warm-weather heating windows when delaying heat remains physically recoverable.
+- Search daytime-only plans first; admit exceptional night heating only when the same bathing opportunity is otherwise unreachable, with an explicit optimization penalty.
+- Add a dynamic `adaptive_floor_temperature`: the minimum current water temperature that still keeps the selected optimized recovery path feasible. The configured `chauffage_predictif_temperature_min_eau_c` remains a hard absolute floor.
+- Keep the controller receding-horizon: only the current action is executed; the multi-day plan is recalculated after new weather, certified water measurements and learned-model updates.
+- Publish `planner`, `model_confidence`, `adaptive_floor_temperature`, `mpc_energy_kwh`, `mpc_night_energy_required` and `mpc_plan` on the predictive status sensor.
+- Extend each 15-day dashboard forecast row with planned MPC heat hours, preset, energy and predicted water start/end temperatures.
+- Keep all hydraulic, forced-stop, freeze, PAC-flow and chlorination safety rules outside MPC with higher priority.
+- Reuse the existing `pool_manager_thermal_learning.json`; no Home Assistant helper migration is required.
+- Keep the v0.7 trajectory planner available with `chauffage_predictif_mpc: false` for rollback/comparison.
+
+
 ## 0.7.3 - Exact certified-measurement pump speed
 
 - Lock the filtration pump to the configured certified-measurement reference speed exactly (70% by default) while predictive temperature stabilization is active.

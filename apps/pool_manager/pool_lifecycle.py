@@ -211,6 +211,7 @@ class LifecycleMixin:
             self.listen_state(self.change_solaire, self.entity_pv_power)
 
         self.listen_state(self.raz_temporisation_mesure_temp, self.args["cde_pompe"], new="off")
+        self.listen_state(self.demarrage_pompe_mesure_temp, self.args["cde_pompe"], new="on")
 
         if "arret_force" in self.args:
             self.listen_state(self.change_arret_force, self.args["arret_force"])
@@ -369,7 +370,29 @@ class LifecycleMixin:
             self.traitement(kwargs)
 
     def raz_temporisation_mesure_temp(self, entity, attribute, old, new, kwargs):
+        # Pompe arrêtée: la sonde de tuyauterie n'est plus une référence bassin.
+        # On décidera au prochain démarrage si une vraie stabilisation est utile.
         self.fin_tempo = 0
+        self.last_pompe_off = datetime.datetime.now()
+
+    def demarrage_pompe_mesure_temp(self, entity, attribute, old, new, kwargs):
+        now = datetime.datetime.now()
+        try:
+            tempo_eau = max(0, int(float(self.get_state(self.args["tempo_eau"]))))
+        except Exception:
+            tempo_eau = 0
+
+        try:
+            duree_arret = max(0.0, (now - self.last_pompe_off).total_seconds())
+        except Exception:
+            duree_arret = float(tempo_eau)
+
+        self.last_pompe_on = now
+
+        # Une coupure plus courte que le délai de circulation n'impose pas de
+        # nouvelle stabilisation. Après un arrêt significatif (typiquement la
+        # nuit), on attend simplement tempo_eau puis la sonde redevient fiable.
+        self.fin_tempo = 0 if duree_arret >= tempo_eau else 1
 
     def ecretage_h_pivot(self, entity, attribute, old, new, kwargs):
         if new > "15:00:00":

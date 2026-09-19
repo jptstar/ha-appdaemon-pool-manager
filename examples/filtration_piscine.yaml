@@ -82,9 +82,11 @@ pool_manager:
   chauffage_preset_turbo: Turbo
   chauffage_debut_saison_marge_c: 0.3
 
-  # v0.7 self-learning predictive heating. The same engine is used in
-  # Automatique and Fin de saison • Smart.
+  # v0.9 self-learning predictive heating. The same engine is used in
+  # Automatique and Fin de saison • Smart. MPC plans all credible bathing
+  # windows across the complete weather horizon, not only the next one.
   chauffage_predictif: false
+  chauffage_predictif_mpc: true
   entity_meteo_chauffage_predictif: weather.home
 
   # Optional virtual sensor published by AppDaemon for dashboard use.
@@ -106,6 +108,11 @@ pool_manager:
   chauffage_predictif_temperature_baignade_ideale_c: 26
   chauffage_predictif_score_baignade_min: 55
 
+  # Prefer weekends when weather is otherwise credible. This bonus can let a
+  # marginal pleasant weekend pass the score gate, but never overrides the hard
+  # minimum outdoor bathing temperature.
+  chauffage_predictif_bonus_weekend: 10
+
   # Initial fallback only. Pool Manager learns real °C/h separately for each
   # PAC preset (Smart, Turbo, etc.) and outdoor-temperature range.
   chauffage_predictif_gain_chauffe_c_par_h: 0.30
@@ -117,6 +124,15 @@ pool_manager:
   chauffage_predictif_apprentissage: true
   chauffage_predictif_apprentissage_min_s: 1800
   chauffage_predictif_apprentissage_alpha: 0.25
+
+  # Full-horizon MPC search. The per-day plan exposes swim/preheat decisions,
+  # target dates, predicted water temperatures and recoverability floors.
+  chauffage_predictif_mpc_pas_h: 1.0
+  chauffage_predictif_mpc_pas_temperature_c: 0.2
+  chauffage_predictif_mpc_puissance_smart_w: 1200
+  chauffage_predictif_mpc_puissance_turbo_w: 1900
+  chauffage_predictif_mpc_penalite_turbo_kwh_h: 0.08
+  chauffage_predictif_mpc_penalite_nuit_kwh_h: 0.35
 
   # Certified water measurement used by learning and important heat decisions.
   # Stabilization is shared with the normal pump-start delay (tempo_eau).

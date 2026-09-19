@@ -36,12 +36,16 @@ def _make_runtime(tmp_path):
     app.chauffage_predictif_mesure_variation_max_c = 0.15
     app.chauffage_predictif_mesure_fraiche_s = 21600
     app.chauffage_predictif_mesure_intervalle_chauffe_s = 7200
+    app.chauffage_predictif_mesure_timeout_grace_s = 300
+    app.chauffage_predictif_mesure_retry_s = 900
 
     app.chauffage_predictif_certified_water_c = None
     app.chauffage_predictif_certified_at = None
     app.chauffage_predictif_measurement_active = False
     app.chauffage_predictif_measurement_purpose = None
+    app.chauffage_predictif_measurement_requested_at = None
     app.chauffage_predictif_measurement_started_at = None
+    app.chauffage_predictif_measurement_failed_at = None
     app.chauffage_predictif_measurement_stable_at = None
     app.chauffage_predictif_measurement_stable_temp = None
     app.chauffage_predictif_measurement_previous_speed = None
@@ -173,6 +177,94 @@ def test_speed_above_70_is_preserved_during_calibration(tmp_path):
         start + datetime.timedelta(minutes=15)
     ) is True
     assert app.speed == 85
+
+
+def test_speed_dip_after_reference_does_not_restart_calibration(tmp_path):
+    app = _make_runtime(tmp_path)
+    app.speed = 70
+    app.chauffage_predictif_measurement_active = True
+    app.chauffage_predictif_measurement_purpose = "decision"
+
+    start = datetime.datetime(2026, 9, 18, 8, 0)
+    assert app._update_certified_measurement(start) is False
+    assert app.chauffage_predictif_measurement_started_at == start
+
+    # A later telemetry dip still re-commands the minimum but must not move the
+    # already-established calibration start time.
+    app.speed = 65
+    assert app._update_certified_measurement(
+        start + datetime.timedelta(minutes=5)
+    ) is False
+    assert app.speed == 70
+    assert app.chauffage_predictif_measurement_started_at == start
+
+    app.water = 25.12
+    assert app._update_certified_measurement(
+        start + datetime.timedelta(minutes=15)
+    ) is True
+    assert app.chauffage_predictif_certified_water_c == 25.12
+
+
+def test_measurement_timeout_releases_stuck_cycle_and_blocks_immediate_retry(tmp_path):
+    app = _make_runtime(tmp_path)
+    app.speed = 60
+    app.chauffage_predictif_measurement_active = True
+    app.chauffage_predictif_measurement_purpose = "decision"
+    app.set_pump_percentage = lambda percentage, force=False: app.speed
+    faults = []
+    app._fault = lambda key, message: faults.append((key, message))
+    app._recover = lambda *args, **kwargs: None
+
+    start = datetime.datetime(2026, 9, 18, 8, 0)
+    assert app._update_certified_measurement(start) is False
+    assert app.chauffage_predictif_measurement_active is True
+    assert app.chauffage_predictif_measurement_started_at is None
+
+    timeout = start + datetime.timedelta(seconds=301)
+    assert app._update_certified_measurement(timeout) is False
+    assert app.chauffage_predictif_measurement_active is False
+    assert app.chauffage_predictif_measurement_failed_at == timeout
+    assert app._measurement_retry_blocked(
+        timeout + datetime.timedelta(minutes=5)
+    ) is True
+    assert any(key == "chauffage_predictif_measurement_timeout" for key, _ in faults)
+
+
+def test_decision_measurement_stops_pac_before_calibration(tmp_path):
+    app = _make_runtime(tmp_path)
+    calls = []
+    app.chauffage_predictif_heat_requested = False
+    app.chauffage_predictif_heat_target_c = None
+    app.chauffage_predictif_last_plan = None
+    app._refresh_predictive_forecast = lambda: []
+    app._predictive_water_temperature = lambda: 27.0
+    app._pac_target_temperature = lambda: 30.0
+    app._recover = lambda *args, **kwargs: None
+    app._build_runtime_predictive_plan = lambda *args, **kwargs: {
+        "action": "PREHEAT",
+        "should_heat": True,
+        "heat_target_c": 28.0,
+        "preset": "Smart",
+        "reason": "préparation",
+        "candidate": {},
+    }
+    app._maybe_measure_during_normal_filtration = lambda plan: False
+    app._measurement_required_before_action = lambda plan: True
+    app._pac_off = lambda reason, post=True: calls.append(
+        ("pac_off", reason, post)
+    ) or True
+    app._request_predictive_measurement = lambda purpose, start_pump=False: calls.append(
+        ("measure", purpose)
+    ) or True
+    app._publish_predictive_status = lambda **kwargs: None
+    app._log_predictive_plan = lambda *args, **kwargs: None
+
+    app._manage_predictive_heating("auto")
+
+    assert calls[0][0] == "pac_off"
+    assert calls[0][2] is False
+    assert ("measure", "decision") in calls
+    assert app.chauffage_predictif_heat_requested is True
 
 
 def test_night_loss_uses_two_certified_measurements_not_mem_temp(tmp_path):

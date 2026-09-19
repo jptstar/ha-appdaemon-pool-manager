@@ -78,11 +78,13 @@ pool_manager:
   chauffage_predictif_perte_nuit_delta10_c_par_h: 0.05
   chauffage_predictif_apprentissage: true
 
-  # Certified water temperature: exact 70% reference cycle, then stability.
+  # Certified water temperature: 70% is a temporary minimum and tempo_eau
+  # is the shared stabilization duration. The calibration is bounded so a
+  # lagging speed report or unavailable probe cannot leave it active forever.
   chauffage_predictif_mesure_vitesse_pct: 70
-  chauffage_predictif_mesure_tempo_s: 900
-  chauffage_predictif_mesure_stabilite_s: 120
-  chauffage_predictif_mesure_variation_max_c: 0.15
+  chauffage_predictif_mesure_fraiche_s: 21600
+  chauffage_predictif_mesure_timeout_grace_s: 300
+  chauffage_predictif_mesure_retry_s: 900
 
   # MPC search resolution and cold-start PAC power assumptions.
   chauffage_predictif_mpc_pas_h: 1.0

@@ -11,6 +11,7 @@ from pool_devices import DevicesMixin
 
 class FakeDevices(DevicesMixin):
     args = {
+        "cde_pompe": "fan.pool",
         "fan_variateur_pompe": "fan.pool",
         "mode_de_fonctionnement": "input_select.pool_mode",
     }
@@ -26,10 +27,22 @@ class FakeDevices(DevicesMixin):
         self.mode = mode
         self.assist = assist
         self.calls = []
+        self.handle_apply_speed = None
+        self.pending_start_context = None
+        self.start_sequence_active = False
+        self.start_sequence_until = None
+        self.handle_delayed_stop = None
+        self.stop_sequence_active = False
+        self.stop_sequence_until = None
+        self.pending_stop_reason = None
+        self.chauffage_predictif_measurement_active = False
+        self.chauffage_predictif_mesure_vitesse_pct = 70
 
     def get_state(self, entity_id, attribute=None):
         if entity_id == "fan.pool" and attribute == "percentage":
             return self.current
+        if entity_id == "fan.pool":
+            return "on"
         if entity_id == "input_select.pool_mode":
             return self.mode
         if entity_id == "switch.local_assist":
@@ -128,3 +141,38 @@ def test_predictive_measurement_blocks_normal_drop_below_reference():
     assert result == 70
     assert devices.calls == []
 
+
+
+def test_active_certified_measurement_blocks_normal_pump_stop():
+    devices = FakeDevices(current=70, last_command=70, mode=TAB_MODE[1])
+    devices.chauffage_predictif_measurement_active = True
+    devices.cancel_timer = lambda *args, **kwargs: None
+    devices.set_consigne_electrolyseur = lambda *args, **kwargs: None
+    devices.set_debug_w = lambda *args, **kwargs: None
+
+    stopped = devices.turn_off_pompe_mem(
+        reason="consommation maison trop élevée"
+    )
+
+    assert stopped is False
+    assert devices.calls == []
+
+
+def test_forced_stop_still_overrides_active_measurement():
+    devices = FakeDevices(current=70, last_command=70, mode=TAB_MODE[1])
+    devices.chauffage_predictif_measurement_active = True
+    devices.cancel_timer = lambda *args, **kwargs: None
+    devices.set_consigne_electrolyseur = lambda *args, **kwargs: None
+    devices.set_debug_w = lambda *args, **kwargs: None
+    devices.mode_speed_initialized = True
+    devices.log = lambda *args, **kwargs: None
+
+    stopped = devices.turn_off_pompe_mem(
+        force=True,
+        reason="arrêt de sécurité",
+    )
+
+    assert stopped is True
+    assert devices.calls == [
+        ("fan/turn_off", {"entity_id": "fan.pool"})
+    ]

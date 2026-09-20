@@ -5,9 +5,10 @@
 - [x] Replace ambiguous cooperative-MRO priority with explicit composition.
 - [x] Document one owner for filtration, PAC, MPC, calibration, energy, safety, devices and journal behavior.
 - [x] Freeze the v0.9.1 Home Assistant entity contract in tests.
-- [x] Add release notes and validation gates without publishing v0.10.0.
-- [ ] Complete target-installation AppDaemon startup and production observer validation.
-- [ ] Publish only after every v0.10.0 validation gate is signed off.
+- [x] Add release notes and automated validation gates for v0.10.0.
+- [x] Validate AppDaemon restart, calibration, quota, MPC and journal behavior from production history.
+- [x] Publish v0.10.0 through the validated HACS release workflow.
+- [ ] Continue installation-specific forced-stop, Hors Gel, PAC flow-loss and chlorinator safety exercises.
 
 ## 0.1.x - Safe baseline
 

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.10.0 - Explicit core coherence (prepared, not published)
+## 0.10.0 - Explicit core coherence
 
 - Replace implicit cooperative-MRO control priority with an explicit domain initialization and decision composition pipeline.
 - Give filtration, PAC policy, MPC, certified calibration, energy/quota arbitration, safety, devices, lifecycle, status and journal one documented owner each.

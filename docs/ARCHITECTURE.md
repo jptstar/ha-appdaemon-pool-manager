@@ -36,4 +36,4 @@ v0.10 does not rename an AppDaemon YAML key, Home Assistant entity, heating-sele
 
 ## Validation boundary
 
-The repository prepares v0.10.0 but does not publish it. A release tag and GitHub/HACS release must wait for the automated suite, configuration validation, AppDaemon startup smoke test, and production dry-run/observer validation.
+The release workflow publishes from `main` only after the Python suite and HACS validation succeed. Production safety scenarios remain operational checks and do not change the compatibility contract above.

@@ -393,10 +393,18 @@ class LifecycleMixin:
             self.traitement(kwargs)
 
     def raz_temporisation_mesure_temp(self, entity, attribute, old, new, kwargs):
-        # Pompe arrêtée: la sonde de tuyauterie n'est plus une référence bassin.
-        # On décidera au prochain démarrage si une vraie stabilisation est utile.
+        # Any real pump stop invalidates an in-flight certified measurement.
+        # The pipe sensor is no longer representative of the pool and the next
+        # calibration must restart its full circulation + stability sequence.
         self.fin_tempo = 0
         self.last_pompe_off = datetime.datetime.now()
+        try:
+            if hasattr(self, "_interrupt_predictive_measurement"):
+                self._interrupt_predictive_measurement(
+                    "pompe arrêtée pendant la mesure"
+                )
+        except Exception:
+            pass
 
     def demarrage_pompe_mesure_temp(self, entity, attribute, old, new, kwargs):
         now = datetime.datetime.now()

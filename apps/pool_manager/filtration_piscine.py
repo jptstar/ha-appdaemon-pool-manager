@@ -76,6 +76,11 @@ class FiltrationPiscine(
             )
         ):
             return "MESURE"
+        if any(
+            word in text
+            for word in ("mpc", "prédictif", "predictif", "prévision", "forecast")
+        ):
+            return "MPC"
         if any(word in text for word in ("pac", "chauffage", "smart", "turbo")):
             return "PAC"
         if any(word in text for word in ("pompe", "vitesse", "circulation")):
@@ -91,11 +96,6 @@ class FiltrationPiscine(
             )
         ):
             return "FILTRATION"
-        if any(
-            word in text
-            for word in ("mpc", "prédictif", "predictif", "prévision", "forecast")
-        ):
-            return "MPC"
         return "SYSTÈME"
 
     @staticmethod

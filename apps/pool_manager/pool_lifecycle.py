@@ -37,6 +37,7 @@ class LifecycleMixin:
         self.handle_delayed_stop = None
         self.stop_sequence_active = False
         self.stop_sequence_until = None
+        self.pending_stop_reason = None
 
         self.last_night_slot = None
 

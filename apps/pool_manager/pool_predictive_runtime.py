@@ -1810,6 +1810,14 @@ class PredictiveHeatingSupport:
 
     def _log_predictive_plan(self, plan, water, target, kind):
         candidate = (plan or {}).get("candidate") or {}
+        swim_dates = tuple(
+            self._iso_date(item)
+            for item in ((plan or {}).get("swim_dates") or [])
+            if isinstance(item, datetime.date)
+        )
+        # Journal only meaningful plan changes. The human-readable reason may
+        # contain continuously changing energy estimates, so it is intentionally
+        # excluded from the deduplication signature.
         signature = (
             kind,
             (plan or {}).get("action"),
@@ -1818,20 +1826,32 @@ class PredictiveHeatingSupport:
             candidate.get("date"),
             (plan or {}).get("recovery_start_date"),
             round(float((plan or {}).get("trajectory_target_c") or 0.0), 1),
-            str((plan or {}).get("reason") or ""),
+            swim_dates,
         )
         if signature == self.chauffage_predictif_last_log_signature:
             return
 
         self.chauffage_predictif_last_log_signature = signature
+        kind_label = {
+            "auto": "automatique",
+            "end_season": "fin de saison",
+            "season_start": "début de saison",
+        }.get(kind, str(kind))
+        action_label = {
+            "WAIT": "attente",
+            "PRESERVE": "préservation",
+            "PREHEAT": "préchauffage",
+            "MAINTAIN": "maintien baignade",
+        }.get((plan or {}).get("action"), str((plan or {}).get("action") or "attente"))
+        reason = str((plan or {}).get("reason") or "").strip()
         try:
-            self.log(
-                f"Chauffage prédictif [{kind}]: "
-                f"eau ~{water:.1f}/{target:.1f} °C | "
-                f"{(plan or {}).get('action', 'WAIT')} | "
-                f"{(plan or {}).get('reason', '')}",
-                log="piscine_log",
+            message = (
+                f"MPC {kind_label} : eau estimée {water:.1f} °C / "
+                f"cible {target:.1f} °C • décision {action_label}"
             )
+            if reason:
+                message += f" • {reason}"
+            self.log(message, log="piscine_log")
         except Exception:
             pass
 

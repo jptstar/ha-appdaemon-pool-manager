@@ -247,7 +247,9 @@ class DevicesMixin:
                     getattr(self, "chauffage_predictif_mesure_vitesse_pct", 70)
                 )
                 try:
-                    self.set_pump_percentage(minimum, force=True)
+                    current = self.get_fan_percentage()
+                    if current is None or current < minimum:
+                        self.set_pump_percentage(minimum, force=True)
                 except Exception:
                     pass
             return False

@@ -190,6 +190,7 @@ class DevicesMixin:
     def temps_depuis_off(self):
         return (datetime.datetime.now() - self.last_pompe_off).total_seconds()
 
+    @staticmethod
     def _pump_reason_label(reason):
         labels = {
             "temperature": "mode température",

@@ -67,7 +67,10 @@ class DevicesMixin:
     def get_pompe_power_reelle(self):
         return self.get_float_state(self.entity_pompe_conso, 0.0)
 
-    def get_reseau_net_w(self):
+    def get_pac_power_reelle(self):
+        return self._get_float_state_raw(self.entity_pac_conso, None)
+
+    def get_restitution_w(self):
         entity_id = self.args["restitution_inst"]
         raw_power = self._get_float_state_raw(entity_id, None)
         if raw_power is None:
@@ -88,8 +91,51 @@ class DevicesMixin:
             entity_id,
         )
         if mode == RESTITUTION_MODE_EXPORT_POSITIVE:
-            # Normalize to the controller's signed net-grid convention:
-            # positive import, negative export.
+            return max(0.0, float(raw_power))
+        return max(0.0, -float(raw_power))
+
+    def get_reseau_net_w(self):
+        import_entity = getattr(self, "entity_grid_import_power", None)
+        if import_entity:
+            import_power = self._get_float_state_raw(import_entity, None)
+            if import_power is None:
+                fault = getattr(self, "_fault", None)
+                if callable(fault):
+                    fault(
+                        "grid_import_power",
+                        f"mesure électrique {import_entity} indisponible; arbitrage solaire suspendu",
+                    )
+                return None
+
+            recover = getattr(self, "_recover", None)
+            if callable(recover):
+                recover("grid_import_power", f"mesure électrique {import_entity}")
+
+            export_power = self.get_restitution_w()
+            if export_power is None:
+                return None
+            return max(0.0, float(import_power)) - export_power
+
+        entity_id = self.args["restitution_inst"]
+        raw_power = self._get_float_state_raw(entity_id, None)
+        if raw_power is None:
+            fault = getattr(self, "_fault", None)
+            if callable(fault):
+                fault(
+                    "restitution_inst",
+                    f"mesure électrique {entity_id} indisponible; arbitrage solaire suspendu",
+                )
+            return None
+
+        recover = getattr(self, "_recover", None)
+        if callable(recover):
+            recover("restitution_inst", f"mesure électrique {entity_id}")
+
+        mode = resolve_restitution_inst_mode(
+            getattr(self, "restitution_inst_mode", RESTITUTION_MODE_AUTO),
+            entity_id,
+        )
+        if mode == RESTITUTION_MODE_EXPORT_POSITIVE:
             return -max(0.0, float(raw_power))
         return float(raw_power)
 
@@ -103,7 +149,7 @@ class DevicesMixin:
     def get_pv_power(self):
         if not self.entity_pv_power:
             return None
-        return self.get_float_state(self.entity_pv_power, 0.0)
+        return self._get_float_state_raw(self.entity_pv_power, None)
 
     def reset_pid(self):
         self.pid_integral = 0.0
@@ -796,7 +842,7 @@ class DevicesMixin:
         etat = self.etat_pac()
         conso_pac = self.get_float_state(self.entity_pac_conso, 0.0)
 
-        if etat in ["off", "veille"]:
-            return max(0.0, surplus_brut), etat, conso_pac
-
-        return max(0.0, surplus_brut - conso_pac), etat, conso_pac
+        # Grid import/export is already measured after every site load,
+        # including the PAC. Subtracting PAC power here would count it twice
+        # and incorrectly erase a genuine measured export.
+        return max(0.0, surplus_brut), etat, conso_pac

@@ -11,6 +11,9 @@ pool_manager:
   pool_manager_log_history_size: 50
   temperature_eau: sensor.pool_water_temperature
   restitution_inst: sensor.grid_power
+  # Optional separate positive import sensor. When configured, Pool Manager
+  # calculates signed grid power as import minus restitution.
+  entity_grid_import_power: sensor.grid_import_power
   # auto: entity ids containing restitution/export/injection are interpreted
   # as positive export; other sensors use positive import / negative export.
   # Set explicitly to net_signed or export_positive if the name is ambiguous.

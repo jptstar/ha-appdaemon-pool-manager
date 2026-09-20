@@ -153,16 +153,37 @@ class StrategyMixin:
     def format_texte_solaire_debug(self, vitesse, surplus_net=None, reseau_net=None, pv_power=None):
         debug_parts = []
         try:
+            if reseau_net is None:
+                reseau_net = self.get_reseau_net_w()
+            if pv_power is None:
+                pv_power = self.get_pv_power()
+
             puissance, reelle = self.puissance_pompe_affichee(vitesse)
             if puissance is not None:
                 suffixe = "réel" if reelle else "estimé"
                 debug_parts.append(f"Pompe {int(round(puissance))}W {suffixe}")
-            if surplus_net is not None:
-                debug_parts.append(f"Surplus {int(round(surplus_net))}W")
+
+            pac_power = self.get_pac_power_reelle()
+            if pac_power is not None:
+                debug_parts.append(f"PAC {int(round(pac_power))}W")
+            else:
+                debug_parts.append("PAC indisponible")
+
             if reseau_net is not None:
-                debug_parts.append(f"Réseau {int(round(reseau_net))}W")
+                debug_parts.append(f"Réseau {int(round(max(0.0, reseau_net)))}W")
+            else:
+                debug_parts.append("Réseau indisponible")
+
+            restitution = self.get_restitution_w()
+            if restitution is not None:
+                debug_parts.append(f"Réinjection {int(round(restitution))}W")
+            else:
+                debug_parts.append("Réinjection indisponible")
+
             if pv_power is not None:
-                debug_parts.append(f"PV {int(round(pv_power))}W")
+                debug_parts.append(f"Solaire {int(round(pv_power))}W")
+            elif getattr(self, "entity_pv_power", None):
+                debug_parts.append("Solaire indisponible")
         except Exception:
             pass
         self.set_debug_w(" | ".join(debug_parts))
@@ -186,11 +207,22 @@ class StrategyMixin:
         self.debut_stabilite_surplus = None
 
     def set_debug_solaire_off(self, surplus_net, reseau_net, pv_power=None):
-        debug_parts = [f"Réseau {int(round(reseau_net))}W"]
-        if surplus_net > 0:
-            debug_parts.insert(0, f"Surplus {int(round(surplus_net))}W")
+        pac_power = self.get_pac_power_reelle()
+        debug_parts = [
+            f"PAC {int(round(pac_power))}W"
+            if pac_power is not None
+            else "PAC indisponible",
+            f"Réseau {int(round(max(0.0, reseau_net)))}W",
+        ]
+        restitution = self.get_restitution_w()
+        if restitution is not None:
+            debug_parts.append(f"Réinjection {int(round(restitution))}W")
+        else:
+            debug_parts.append("Réinjection indisponible")
         if pv_power is not None:
-            debug_parts.append(f"PV {int(round(pv_power))}W")
+            debug_parts.append(f"Solaire {int(round(pv_power))}W")
+        elif getattr(self, "entity_pv_power", None):
+            debug_parts.append("Solaire indisponible")
         self.set_debug_w(" | ".join(debug_parts))
 
     def _is_night_brassage_slot_base(self, heure_actuelle):
@@ -253,7 +285,9 @@ class StrategyMixin:
                         f"{libelle} | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
                         f"démarrage | {vitesse}% | limite {self.heure_limite_quota_journalier[:5]} | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
                     )
-                    self.set_debug_w(f"PAC {etat_pac}")
+                    self.format_texte_solaire_debug(
+                        vitesse, surplus_net, reseau_net, pv_power
+                    )
                     return True
 
                 vitesse_appliquee = self.set_pump_percentage(vitesse)
@@ -277,7 +311,9 @@ class StrategyMixin:
                     f"PAC prioritaire | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
                     f"démarrage | {vitesse_min_pac}% | {extra_quota} | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h".replace(" |  |", " |")
                 )
-                self.set_debug_w(f"PAC {etat_pac}")
+                self.format_texte_solaire_debug(
+                    vitesse_min_pac, surplus_net, reseau_net, pv_power
+                )
                 return True
 
             # During the configured solar window, let the downstream PID/solar
@@ -321,7 +357,9 @@ class StrategyMixin:
                     f"Garantie quota critique | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
                     f"démarrage | {vitesse}% | limite {self.heure_limite_quota_journalier[:5]} | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
                 )
-                self.set_debug_w("")
+                self.format_texte_solaire_debug(
+                    vitesse, surplus_net, reseau_net, pv_power
+                )
                 return True
 
             vitesse_appliquee = self.set_pump_percentage(vitesse)

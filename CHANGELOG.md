@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.2 - Physical power-flow debug
+
+- Add optional `entity_grid_import_power` support for installations exposing positive grid import and positive restitution as separate Home Assistant entities.
+- Calculate signed net-grid power as import minus restitution while preserving the v0.10.1 single-sensor fallback.
+- Replace the ambiguous debug surplus with five physical readings: pump, PAC, grid import, reinjection and solar production.
+- Keep real/estimated qualification for pump power and expose unavailable PAC, grid, reinjection or solar readings explicitly.
+- Stop subtracting PAC power twice from grid export: the point-of-connection measurement already includes every site load.
+
 ## 0.10.1 - Reliable solar-surplus input
 
 - Accept both historical positive-export `restitution_inst` sensors and signed net-grid sensors without renaming an existing Home Assistant entity.

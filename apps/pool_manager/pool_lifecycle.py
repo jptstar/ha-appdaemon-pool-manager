@@ -97,6 +97,7 @@ class LifecycleMixin:
         self.entity_pac_conso = self.args["entity_pac_conso"]
         self.entity_pompe_conso = self.args["entity_pompe_conso"]
         self.entity_pv_power = self.args.get("entity_pv_power")
+        self.entity_grid_import_power = self.args.get("entity_grid_import_power")
         self.entity_debug_w = self.args.get("entity_debug_w")
         self.restitution_inst_mode = self.args.get("restitution_inst_mode", "auto")
 
@@ -206,6 +207,8 @@ class LifecycleMixin:
         self.listen_state(self.change_mode_calcul, self.args["mode_calcul"])
 
         self.listen_state(self.change_solaire, self.args["restitution_inst"])
+        if self.entity_grid_import_power:
+            self.listen_state(self.change_solaire, self.entity_grid_import_power)
         self.listen_state(self.change_solaire, self.entity_pac_conso)
         self.listen_state(self.change_solaire, self.entity_pac_climate)
         self.listen_state(self.change_solaire, self.entity_pompe_conso)

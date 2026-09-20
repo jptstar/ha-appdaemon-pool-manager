@@ -371,14 +371,15 @@ For non-Aquagem fan integrations, the keepalive is disabled unless explicitly en
 Pool Manager accepts the two common Home Assistant grid-power conventions without changing the existing `restitution_inst` key:
 
 ```yaml
-restitution_inst: sensor.grid_power
+entity_grid_import_power: sensor.grid_import_power  # optional positive import
+restitution_inst: sensor.grid_export_power          # positive export
 restitution_inst_mode: auto
-entity_pv_power: sensor.solar_power  # optional debug value
+entity_pv_power: sensor.solar_power                 # optional production
 ```
 
-With `auto`, an entity id containing `restitution`, `export` or `injection` is treated as an export-only sensor whose positive value means power sent to the grid. Other entity ids are treated as signed net-grid power: positive import and negative export. Ambiguous entity names can be made explicit with `restitution_inst_mode: export_positive` or `restitution_inst_mode: net_signed`.
+When `entity_grid_import_power` is configured, Pool Manager calculates signed grid power as positive import minus positive restitution. With no separate import entity, the v0.10.1 single-sensor behavior remains available: `auto` treats an entity id containing `restitution`, `export` or `injection` as positive export, while other entity ids are treated as signed net-grid power. Ambiguous entity names can be made explicit with `restitution_inst_mode: export_positive` or `restitution_inst_mode: net_signed`.
 
-The optional `entity_pv_power` value is displayed in the existing power-debug helper. Solar-surplus control still uses the grid measurement because it represents the real power available after house consumption. If `restitution_inst` is absent, unavailable or non-numeric, Pool Manager suspends solar arbitration and journals a fail-safe event instead of silently using `0 W`.
+The power-debug helper reports physical measurements directly, for example `Pompe 516W réel | PAC 1624W | Réseau 1115W | Réinjection 0W | Solaire 2313W`. Solar-surplus control uses the signed point-of-connection result because it represents the real power available after house and pool consumption. PAC consumption is not subtracted again from an already measured export. If a required grid input is absent, unavailable or non-numeric, Pool Manager suspends solar arbitration and journals a fail-safe event instead of silently using `0 W`.
 
 ## Heating override boundary
 

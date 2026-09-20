@@ -190,54 +190,125 @@ class DevicesMixin:
     def temps_depuis_off(self):
         return (datetime.datetime.now() - self.last_pompe_off).total_seconds()
 
-    def turn_on_pompe_mem(self):
+    def _pump_reason_label(reason):
+        labels = {
+            "temperature": "mode température",
+            "stabilisation_temperature": "stabilisation température",
+            "mesure_temperature": "mesure température",
+            "surplus_solaire": "surplus solaire",
+            "rattrapage": "rattrapage filtration",
+            "complement_soir": "complément filtration du soir",
+            "pac_prioritaire": "besoin PAC",
+            "garantie_quota_critique": "garantie du quota filtration",
+            "marche_forcee": "marche forcée",
+            "hors_gel": "hors gel",
+            "brassage_nuit": "brassage nocturne",
+        }
+        return labels.get(str(reason or ""), str(reason or "").replace("_", " "))
+
+    def turn_on_pompe_mem(self, reason=None):
         self.cancel_pending_stop_sequence()
         if not self.pompe_est_on():
             self.call_service("fan/turn_on", entity_id=self.args["cde_pompe"])
             self.last_pompe_on = datetime.datetime.now()
+            try:
+                label = self._pump_reason_label(reason)
+                message = "Pompe démarrée"
+                if label:
+                    message += f" : {label}"
+                self.log(message, log="piscine_log")
+            except Exception:
+                pass
         self.maj_electrolyseur()
 
-    def turn_off_pompe_mem(self, force=False):
+    def turn_off_pompe_mem(self, force=False, reason=None):
         self.cancel_pending_start_sequence()
 
         if force or self.arret_force_actif():
             self.cancel_pending_stop_sequence()
-            self.set_consigne_electrolyseur(self.consigne_electrolyseur_arret, force=True)
-            self.turn_off_pompe_direct()
-            return
+            self.set_consigne_electrolyseur(
+                self.consigne_electrolyseur_arret,
+                force=True,
+            )
+            forced_reason = reason or (
+                "arrêt forcé" if self.arret_force_actif() else "arrêt de sécurité"
+            )
+            self.turn_off_pompe_direct(reason=forced_reason)
+            return True
+
+        # A certified temperature measurement is a short, protected hydraulic
+        # operation. Normal solar/grid/quota optimization may not interrupt it:
+        # throwing away an almost-finished 15 min + stability cycle is both less
+        # efficient and can feed the MPC a stale pipe temperature. Safety/forced
+        # stops above still keep absolute priority.
+        if bool(getattr(self, "chauffage_predictif_measurement_active", False)):
+            if self.pompe_est_on():
+                minimum = int(
+                    getattr(self, "chauffage_predictif_mesure_vitesse_pct", 70)
+                )
+                try:
+                    self.set_pump_percentage(minimum, force=True)
+                except Exception:
+                    pass
+            return False
 
         if not self.pompe_est_on():
             self.set_consigne_electrolyseur(self.consigne_electrolyseur_arret)
             self.cancel_pending_stop_sequence()
             self.set_debug_w("")
-            return
+            return False
 
         if self.stop_sequence_is_running():
-            return
+            return False
 
-        # Arrêt normal : on coupe d'abord l'électrolyseur puis on laisse circuler l'eau.
-        self.set_consigne_electrolyseur(self.consigne_electrolyseur_arret, force=True)
+        # Normal stop: stop electrolysis first, then let water circulate for the
+        # configured shutdown delay.
+        self.set_consigne_electrolyseur(
+            self.consigne_electrolyseur_arret,
+            force=True,
+        )
+        self.pending_stop_reason = reason
         self.stop_sequence_active = True
-        self.stop_sequence_until = datetime.datetime.now() + timedelta(seconds=self.tempo_arret_electrolyseur_s)
-        self.handle_delayed_stop = self.run_in(self.apply_pending_stop_after_electrolyseur, self.tempo_arret_electrolyseur_s)
+        self.stop_sequence_until = datetime.datetime.now() + timedelta(
+            seconds=self.tempo_arret_electrolyseur_s
+        )
+        self.handle_delayed_stop = self.run_in(
+            self.apply_pending_stop_after_electrolyseur,
+            self.tempo_arret_electrolyseur_s,
+        )
+        return True
 
-    def turn_off_pompe_direct(self):
-        if self.pompe_est_on():
+    def turn_off_pompe_direct(self, reason=None):
+        was_on = self.pompe_est_on()
+        if was_on:
             self.call_service("fan/turn_off", entity_id=self.args["cde_pompe"])
             self.last_pompe_off = datetime.datetime.now()
             self.derniere_vitesse_commande = None
+            try:
+                label = self._pump_reason_label(reason)
+                message = "Pompe arrêtée"
+                if label:
+                    message += f" : {label}"
+                self.log(message, log="piscine_log")
+            except Exception:
+                pass
 
         self.mode_speed_initialized = False
         self.set_debug_w("")
 
     def apply_pending_stop_after_electrolyseur(self, kwargs):
+        reason = getattr(self, "pending_stop_reason", None)
         try:
-            self.set_consigne_electrolyseur(self.consigne_electrolyseur_arret, force=True)
-            self.turn_off_pompe_direct()
+            self.set_consigne_electrolyseur(
+                self.consigne_electrolyseur_arret,
+                force=True,
+            )
+            self.turn_off_pompe_direct(reason=reason)
         finally:
             self.handle_delayed_stop = None
             self.stop_sequence_active = False
             self.stop_sequence_until = None
+            self.pending_stop_reason = None
 
     def cancel_pending_stop_sequence(self):
         if self.handle_delayed_stop is not None:
@@ -249,6 +320,7 @@ class DevicesMixin:
 
         self.stop_sequence_active = False
         self.stop_sequence_until = None
+        self.pending_stop_reason = None
 
     def stop_sequence_is_running(self):
         if not self.stop_sequence_active:
@@ -370,11 +442,19 @@ class DevicesMixin:
 
         self.cancel_pending_start_sequence()
         self.start_sequence_active = True
-        self.start_sequence_until = datetime.datetime.now() + timedelta(seconds=delay_s + 3)
-        self.pending_start_context = {"percentage": percentage, "context": context}
+        self.start_sequence_until = datetime.datetime.now() + timedelta(
+            seconds=delay_s + 3
+        )
+        self.pending_start_context = {
+            "percentage": percentage,
+            "context": context,
+        }
 
-        self.turn_on_pompe_mem()
-        self.handle_apply_speed = self.run_in(self.apply_pending_speed_after_start, delay_s)
+        self.turn_on_pompe_mem(reason=context)
+        self.handle_apply_speed = self.run_in(
+            self.apply_pending_speed_after_start,
+            delay_s,
+        )
 
     def apply_pending_speed_after_start(self, kwargs):
         ctx = self.pending_start_context or {}

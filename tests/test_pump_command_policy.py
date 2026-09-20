@@ -37,6 +37,7 @@ class FakeDevices(DevicesMixin):
         self.pending_stop_reason = None
         self.chauffage_predictif_measurement_active = False
         self.chauffage_predictif_mesure_vitesse_pct = 70
+        self.consigne_electrolyseur_arret = 0.0
 
     def get_state(self, entity_id, attribute=None):
         if entity_id == "fan.pool" and attribute == "percentage":

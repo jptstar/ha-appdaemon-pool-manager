@@ -222,7 +222,18 @@ class ControlMixin:
 
         if mode == TAB_MODE[1]:
             reseau_net = self.get_reseau_net_w()
-            surplus_brut = self.get_surplus_depuis_reseau_net()
+            if reseau_net is None:
+                self.debut_manque_soleil = None
+                self.reset_stabilite_surplus()
+                self.reset_pid()
+                self.set_messages(
+                    f"Mesure réseau indisponible | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
+                    "arbitrage solaire suspendu; vérifier restitution_inst",
+                )
+                self.set_debug_w("Réseau indisponible")
+                return
+
+            surplus_brut = self.get_surplus_depuis_reseau_net(reseau_net)
             surplus_net, etat_pac, _ = self.calcule_surplus_net_avec_pac(surplus_brut)
             pv_power = self.get_pv_power()
 

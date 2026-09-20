@@ -6,6 +6,44 @@ from datetime import timedelta
 
 from pool_common import *
 
+
+RESTITUTION_MODE_AUTO = "auto"
+RESTITUTION_MODE_NET_SIGNED = "net_signed"
+RESTITUTION_MODE_EXPORT_POSITIVE = "export_positive"
+
+
+def resolve_restitution_inst_mode(configured_mode, entity_id):
+    """Resolve the grid-power sign convention without renaming the HA entity.
+
+    Historical installations commonly use an export-only sensor named
+    ``restitution`` whose positive value means power sent to the grid.  Newer
+    examples use a signed net-grid sensor (positive import, negative export).
+    ``auto`` keeps both configurations compatible by using the entity id as a
+    conservative hint; an explicit mode always wins.
+    """
+    aliases = {
+        "": RESTITUTION_MODE_AUTO,
+        "auto": RESTITUTION_MODE_AUTO,
+        "net_signed": RESTITUTION_MODE_NET_SIGNED,
+        "grid_signed": RESTITUTION_MODE_NET_SIGNED,
+        "reseau_signe": RESTITUTION_MODE_NET_SIGNED,
+        "réseau_signé": RESTITUTION_MODE_NET_SIGNED,
+        "export_positive": RESTITUTION_MODE_EXPORT_POSITIVE,
+        "positive_export": RESTITUTION_MODE_EXPORT_POSITIVE,
+        "restitution_positive": RESTITUTION_MODE_EXPORT_POSITIVE,
+    }
+    requested = aliases.get(str(configured_mode or "auto").strip().lower())
+    if requested is None:
+        return RESTITUTION_MODE_NET_SIGNED
+    if requested != RESTITUTION_MODE_AUTO:
+        return requested
+
+    entity_name = str(entity_id or "").strip().lower()
+    if any(token in entity_name for token in ("restitution", "export", "injection")):
+        return RESTITUTION_MODE_EXPORT_POSITIVE
+    return RESTITUTION_MODE_NET_SIGNED
+
+
 class DevicesMixin:
 
     def _get_float_state_raw(self, entity_id, default=0.0):
@@ -30,10 +68,36 @@ class DevicesMixin:
         return self.get_float_state(self.entity_pompe_conso, 0.0)
 
     def get_reseau_net_w(self):
-        return self.get_float_state(self.args["restitution_inst"], 0.0)
+        entity_id = self.args["restitution_inst"]
+        raw_power = self._get_float_state_raw(entity_id, None)
+        if raw_power is None:
+            fault = getattr(self, "_fault", None)
+            if callable(fault):
+                fault(
+                    "restitution_inst",
+                    f"mesure électrique {entity_id} indisponible; arbitrage solaire suspendu",
+                )
+            return None
 
-    def get_surplus_depuis_reseau_net(self):
-        puissance_reseau_nette = self.get_reseau_net_w()
+        recover = getattr(self, "_recover", None)
+        if callable(recover):
+            recover("restitution_inst", f"mesure électrique {entity_id}")
+
+        mode = resolve_restitution_inst_mode(
+            getattr(self, "restitution_inst_mode", RESTITUTION_MODE_AUTO),
+            entity_id,
+        )
+        if mode == RESTITUTION_MODE_EXPORT_POSITIVE:
+            # Normalize to the controller's signed net-grid convention:
+            # positive import, negative export.
+            return -max(0.0, float(raw_power))
+        return float(raw_power)
+
+    def get_surplus_depuis_reseau_net(self, puissance_reseau_nette=None):
+        if puissance_reseau_nette is None:
+            puissance_reseau_nette = self.get_reseau_net_w()
+        if puissance_reseau_nette is None:
+            return 0.0
         return max(0.0, -puissance_reseau_nette - self.marge_surplus_securite)
 
     def get_pv_power(self):

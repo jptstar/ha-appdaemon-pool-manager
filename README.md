@@ -366,6 +366,20 @@ pompe_remote_keepalive_s: 30
 
 For non-Aquagem fan integrations, the keepalive is disabled unless explicitly enabled. The automatic keepalive never runs in Température or Marche Forcée, so intentional manual/local speed control remains possible.
 
+## Grid-power and solar-production inputs
+
+Pool Manager accepts the two common Home Assistant grid-power conventions without changing the existing `restitution_inst` key:
+
+```yaml
+restitution_inst: sensor.grid_power
+restitution_inst_mode: auto
+entity_pv_power: sensor.solar_power  # optional debug value
+```
+
+With `auto`, an entity id containing `restitution`, `export` or `injection` is treated as an export-only sensor whose positive value means power sent to the grid. Other entity ids are treated as signed net-grid power: positive import and negative export. Ambiguous entity names can be made explicit with `restitution_inst_mode: export_positive` or `restitution_inst_mode: net_signed`.
+
+The optional `entity_pv_power` value is displayed in the existing power-debug helper. Solar-surplus control still uses the grid measurement because it represents the real power available after house consumption. If `restitution_inst` is absent, unavailable or non-numeric, Pool Manager suspends solar arbitration and journals a fail-safe event instead of silently using `0 W`.
+
 ## Heating override boundary
 
 Pool Manager can consume an optional Home Assistant heating-override policy signal:
@@ -387,6 +401,7 @@ fail_safe_active: true
 Important degraded behaviors are intentionally conservative:
 
 - unavailable pool-water temperature never silently becomes 10 °C; Pool Manager uses the configured HA memory helper, then the last valid value, then `temperature_eau_secours_c` (32 °C by default);
+- unavailable grid power suspends solar arbitration instead of becoming a false `0 W` reading;
 - an unavailable PAC climate entity blocks a new automatic PAC start;
 - if PAC power proves that the PAC is active while the climate state is unavailable, Pool Manager keeps a PAC circulation demand instead of assuming the PAC is off;
 - if PAC power indicates activity but pump state/speed cannot confirm the configured minimum circulation, Pool Manager first tries to restore circulation, then commands the PAC off after `pac_flow_fail_timeout_s` when the climate entity is controllable;

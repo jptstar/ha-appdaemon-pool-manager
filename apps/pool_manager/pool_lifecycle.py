@@ -98,6 +98,7 @@ class LifecycleMixin:
         self.entity_pompe_conso = self.args["entity_pompe_conso"]
         self.entity_pv_power = self.args.get("entity_pv_power")
         self.entity_debug_w = self.args.get("entity_debug_w")
+        self.restitution_inst_mode = self.args.get("restitution_inst_mode", "auto")
 
         # Optional integration-level local-panel handoff (for example Aquagem).
         self.entity_pompe_local_panel_assist = self.args.get("entity_pompe_local_panel_assist")

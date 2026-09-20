@@ -11,6 +11,12 @@ pool_manager:
   pool_manager_log_history_size: 50
   temperature_eau: sensor.pool_water_temperature
   restitution_inst: sensor.grid_power
+  # auto: entity ids containing restitution/export/injection are interpreted
+  # as positive export; other sensors use positive import / negative export.
+  # Set explicitly to net_signed or export_positive if the name is ambiguous.
+  restitution_inst_mode: auto
+  # Optional production value used by the power debug helper.
+  entity_pv_power: sensor.solar_power
 
   # General mode / scheduling
   mode_de_fonctionnement: input_select.pool_operating_mode

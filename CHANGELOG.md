@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.1 - Reliable solar-surplus input
+
+- Accept both historical positive-export `restitution_inst` sensors and signed net-grid sensors without renaming an existing Home Assistant entity.
+- Auto-detect entity ids containing `restitution`, `export` or `injection` as positive export; allow an explicit `restitution_inst_mode` override for ambiguous names.
+- Stop converting a missing, `unknown`, `unavailable` or non-numeric grid reading into a believable `0 W` measurement.
+- Suspend solar arbitration while the grid measurement is unavailable and journal one fail-safe event plus its recovery.
+- Add the optional `entity_pv_power` example so photovoltaic production can appear in the existing power-debug helper.
+
 ## 0.10.0 - Explicit core coherence
 
 - Replace implicit cooperative-MRO control priority with an explicit domain initialization and decision composition pipeline.

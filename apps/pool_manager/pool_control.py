@@ -8,7 +8,7 @@ from pool_common import *
 
 class ControlMixin:
 
-    def traitement(self, kwargs):
+    def _traitement_filtration(self, kwargs):
         self.maj_cumul_filtration()
 
         mode = self.get_state(self.args["mode_de_fonctionnement"]).strip()

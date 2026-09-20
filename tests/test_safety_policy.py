@@ -5,6 +5,7 @@ MODULE_DIR = Path(__file__).parents[1] / "apps" / "pool_manager"
 sys.path.insert(0, str(MODULE_DIR))
 
 from pool_common import TAB_MODE
+from pool_auto_gate import AutoModeGateMixin
 from pool_safety import (
     SafetyMixin,
     decide_hors_gel_continu,
@@ -56,14 +57,11 @@ def test_pac_stop_requires_all_three_cold_conditions():
 
 
 class _Base:
-    def get_float_state(self, entity_id, default=0.0):
+    def _get_float_state_raw(self, entity_id, default=0.0):
         return default
 
-    def pac_besoin_chauffe(self):
-        return False
 
-
-class _SafetyApp(SafetyMixin, _Base):
+class _SafetyApp(AutoModeGateMixin, SafetyMixin, _Base):
     pass
 
 
@@ -101,4 +99,30 @@ def test_active_pac_power_keeps_flow_demand_if_climate_state_is_lost():
     app.pac_flow_active_w = 200.0
     app.pac_auto_start_pending = False
     app.pac_post_circulation_until = None
-    assert app.pac_besoin_chauffe() is True
+    assert app._pac_circulation_securite_requise() is True
+
+
+def test_auto_gate_blocks_seasonal_pac_policy_explicitly():
+    app = make_safety_app({"input_boolean.pool_auto": "off"})
+    app.gestion_pac_auto = True
+    app.entity_mode_auto = "input_boolean.pool_auto"
+    app.pac_auto_start_pending = True
+    app.handle_pac_auto_start = None
+    app.pac_auto_start_deadline = object()
+    app._manage_pac_saisonnier()
+    assert app.pac_auto_start_pending is False
+    assert app.pac_auto_start_deadline is None
+
+
+def test_auto_gate_aborts_pending_start_callback_before_flow_checks():
+    app = make_safety_app({"input_boolean.pool_auto": "off"})
+    app.gestion_pac_auto = True
+    app.entity_mode_auto = "input_boolean.pool_auto"
+    app.pac_auto_start_pending = True
+    app.handle_pac_auto_start = "timer"
+    app.pac_auto_start_deadline = object()
+    app.cancel_timer = lambda handle: None
+    app._check_pac_start({})
+    assert app.pac_auto_start_pending is False
+    assert app.handle_pac_auto_start is None
+    assert app.pac_auto_start_deadline is None

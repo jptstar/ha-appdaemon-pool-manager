@@ -12,10 +12,8 @@ class AutoModeGateMixin:
     If no entity is configured, behavior stays backward-compatible.
     """
 
-    def initialize(self):
+    def _initialize_auto_gate(self):
         self.entity_mode_auto = self.args.get("entity_mode_auto")
-        super().initialize()
-
         if self.entity_mode_auto:
             self.listen_state(
                 self.change_mode_auto,
@@ -36,20 +34,3 @@ class AutoModeGateMixin:
         if not self.mode_auto_autorise():
             self._cancel_pac_start()
         self.safety_tick({})
-
-    def _manage_pac_auto(self):
-        """Suspend normal automatic PAC policy while pool auto mode is off."""
-        if getattr(self, "gestion_pac_auto", False) and not self.mode_auto_autorise():
-            self._cancel_pac_start()
-            return
-        return super()._manage_pac_auto()
-
-    def _check_pac_start(self, kwargs):
-        """Abort a pending PAC start if auto mode is disabled mid-sequence."""
-        if getattr(self, "gestion_pac_auto", False) and not self.mode_auto_autorise():
-            # The callback that was scheduled is now executing, so clear its
-            # handle before cancelling the logical pending-start state.
-            self.handle_pac_auto_start = None
-            self._cancel_pac_start()
-            return
-        return super()._check_pac_start(kwargs)

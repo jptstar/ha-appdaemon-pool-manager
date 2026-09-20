@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Copyright (C) 2026 jptstar
 
-import datetime
-
 import hassapi as hass
 
 from pool_common import *
@@ -16,6 +14,17 @@ from pool_lifecycle import LifecycleMixin
 from pool_devices import DevicesMixin
 from pool_strategy import StrategyMixin
 from pool_control import ControlMixin
+from pool_journal import journal_category, journal_french, publish_journal_event
+
+
+INITIALIZATION_STAGES = (
+    "_initialize_runtime_stability",
+    "_initialize_heating",
+    "_initialize_auto_gate",
+    "_initialize_safety",
+    "_initialize_daylight",
+    "_initialize_lifecycle",
+)
 
 
 class FiltrationPiscine(
@@ -45,144 +54,15 @@ class FiltrationPiscine(
 
     @staticmethod
     def _pool_log_category(message):
-        text = str(message or "").casefold()
-        if any(
-            word in text
-            for word in (
-                "sécurité",
-                "securite",
-                "hors gel",
-                "fail-safe",
-                "⚠",
-                "erreur",
-                "fault",
-            )
-        ):
-            return "SÉCURITÉ"
-        if any(word in text for word in ("apprentissage", "pertes nuit", "°c/h")):
-            return "APPRENTISSAGE"
-        if "électrolys" in text or "electrolys" in text:
-            return "ÉLECTROLYSE"
-        if any(word in text for word in ("volet", "cover")):
-            return "VOLET"
-        if any(
-            word in text
-            for word in (
-                "température bassin certifiée",
-                "température eau certifiée",
-                "mesure température",
-                "stabilisation",
-                "calibration",
-            )
-        ):
-            return "MESURE"
-        if any(
-            word in text
-            for word in ("mpc", "prédictif", "predictif", "prévision", "forecast")
-        ):
-            return "MPC"
-        if any(word in text for word in ("pac", "chauffage", "smart", "turbo")):
-            return "PAC"
-        if any(word in text for word in ("pompe", "vitesse", "circulation")):
-            return "POMPE"
-        if any(
-            word in text
-            for word in (
-                "filtration",
-                "quota",
-                "surplus",
-                "rattrapage",
-                "complément",
-            )
-        ):
-            return "FILTRATION"
-        return "SYSTÈME"
+        return journal_category(message)
 
     @staticmethod
     def _pool_log_french(message):
         """Translate internal controller tokens before they reach the HA journal."""
-        text = str(message or "").strip()
-        replacements = (
-            ("startup_calibration", "mesure au démarrage"),
-            ("morning_decision", "décision du matin"),
-            ("heating_learning", "apprentissage chauffage"),
-            ("target_check", "contrôle de consigne"),
-            ("temperature_stabilization", "stabilisation température"),
-            ("end_season", "fin de saison"),
-            ("season_start", "début de saison"),
-            ("PREHEAT", "préchauffage"),
-            ("MAINTAIN", "maintien baignade"),
-            ("PRESERVE", "préservation"),
-            ("WAIT", "attente"),
-            ("Heat/", "chauffage "),
-            ("closed", "fermé"),
-            ("open", "ouvert"),
-            (" -> ", " → "),
-        )
-        for source, target in replacements:
-            text = text.replace(source, target)
-        return text
+        return journal_french(message)
 
     def _publish_pool_manager_log(self, message):
-        entity = getattr(self, "entity_pool_manager_log", None)
-        if not entity:
-            return
-
-        now = datetime.datetime.now()
-        text = self._pool_log_french(message)
-        if not text:
-            return
-        category = self._pool_log_category(text)
-
-        history = list(getattr(self, "_pool_manager_log_history", []))
-        # The old comparison included the timestamp, so an identical status
-        # emitted every 30 s was always considered new. The journal is now
-        # event-based: consecutive identical semantic events are ignored.
-        if history:
-            last = history[-1]
-            if (
-                last.get("category") == category
-                and last.get("message") == text
-            ):
-                return
-
-        entry = {
-            "timestamp": now.isoformat(timespec="seconds"),
-            "category": category,
-            "message": text[:500],
-        }
-        history.append(entry)
-        history_size = int(
-            max(
-                10,
-                min(
-                    100,
-                    getattr(self, "pool_manager_log_history_size", 50),
-                ),
-            )
-        )
-        history = history[-history_size:]
-        self._pool_manager_log_history = history
-
-        state = f"{now.strftime('%H:%M:%S')} • {category} • {text}"
-        if len(state) > 180:
-            state = state[:177] + "..."
-
-        self.set_state(
-            entity,
-            state=state,
-            attributes={
-                "friendly_name": "Piscine • Journal",
-                "icon": "mdi:text-box-outline",
-                "timestamp": entry["timestamp"],
-                "category": category,
-                "message": text,
-                "history": history,
-                "history_size": len(history),
-                "history_limit": history_size,
-            },
-            replace=True,
-        )
+        return publish_journal_event(self, message)
 
     def call_service(self, service, **kwargs):
         """Keep legacy response calls compatible with AppDaemon 4.5+.
@@ -234,7 +114,10 @@ class FiltrationPiscine(
         )
         self.electrolyse_basse_temp_bloquee = True
 
-        super().initialize()
+        # Composition root: domain initialization order is explicit.  No
+        # safety or control priority depends on Python's cooperative MRO.
+        for stage in INITIALIZATION_STAGES:
+            getattr(self, stage)()
 
         self.log("Pool Manager initialisé", log="piscine_log")
 
@@ -282,7 +165,12 @@ class FiltrationPiscine(
         """
         if self.derogation_chauffage_active():
             return True
-        return super().pac_besoin_chauffe()
+        heating_request = self._pac_circulation_chauffage_requise()
+        if heating_request is not None:
+            return bool(heating_request)
+        if self._pac_circulation_securite_requise():
+            return True
+        return self._pac_besoin_chauffe_physique()
 
     def temperature_eau_brute_electrolyse(self):
         """Return the physical water-probe value without fail-safe substitution."""
@@ -348,7 +236,9 @@ class FiltrationPiscine(
         """Require both normal hydraulic safety and valid water temperature."""
         if not self.electrolyse_temperature_autorisee():
             return False
-        return super().electrolyseur_autorise()
+        if not self._electrolyse_securite_autorisee():
+            return False
+        return self._electrolyse_hydrauliquement_autorisee()
 
     def set_consigne_electrolyseur(self, valeur, force=False):
         """Set chlorinator production without blocking critical pump control.

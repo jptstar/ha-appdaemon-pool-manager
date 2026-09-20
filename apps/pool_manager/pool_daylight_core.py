@@ -52,7 +52,7 @@ def brassage_nuit_intelligent_autorise(mode, enabled):
 class DaylightMixin:
     """Daylight-aware Intelligent mode and persisted thermal-reference handling."""
 
-    def initialize(self):
+    def _initialize_daylight(self):
         b = lambda key, default: str(self.args.get(key, default)).lower() == "true"
 
         # Intelligent mode follows actual daylight when AppDaemon's sun API is
@@ -85,8 +85,6 @@ class DaylightMixin:
             int(float(self.args.get("temperature_reference_min_update_s", 1800))),
         )
         self.last_temperature_reference_update = None
-
-        super().initialize()
 
     # ---------------------------- daylight window ----------------------------
     @staticmethod
@@ -195,7 +193,7 @@ class DaylightMixin:
     def progression_attendue(self, objectif_temps_eq):
         bounds = self._daylight_bounds()
         if bounds is None:
-            return super().progression_attendue(objectif_temps_eq)
+            return self._progression_attendue_fixe(objectif_temps_eq)
         start, end = bounds
         now = self._now_like(start)
         return progression_solaire(now, start, end, objectif_temps_eq)
@@ -203,7 +201,7 @@ class DaylightMixin:
     def temps_restant_plage_solaire_h(self):
         bounds = self._daylight_bounds()
         if bounds is None:
-            return super().temps_restant_plage_solaire_h()
+            return self._temps_restant_plage_solaire_fixe_h()
         _, end = bounds
         now = self._now_like(end)
         if now >= end:
@@ -211,12 +209,27 @@ class DaylightMixin:
         return max(0.0, (end - now).total_seconds() / 3600.0)
 
     def stabilite_surplus_ok(self, surplus_disponible):
-        # This also closes the old loophole where a large electrical export could
-        # start the pump before the configured solar period.
-        if self.suivre_soleil_reel and not self._daylight_active():
+        # Daylight owns the time gate; the energy strategy owns electrical
+        # stability.  A sanitary catch-up may start during daylight without PV.
+        daytime = (
+            self._daylight_active()
+            if self.suivre_soleil_reel
+            else self._fixed_range_active(
+                self.heure_debut_solaire,
+                self.heure_fin_solaire,
+            )
+        )
+        if not daytime:
             self.debut_stabilite_surplus = None
             return False, self.tempo_stabilite_surplus
-        return super().stabilite_surplus_ok(surplus_disponible)
+        try:
+            surplus = float(surplus_disponible)
+        except (TypeError, ValueError):
+            surplus = 0.0
+        if surplus < self.seuil_surplus_demarrage_w:
+            self.debut_stabilite_surplus = None
+            return True, 0
+        return self._stabilite_surplus_electrique_ok(surplus)
 
     # -------------------------- Intelligent night mixing --------------------------
     def is_night_brassage_slot(self, heure_actuelle):
@@ -226,7 +239,7 @@ class DaylightMixin:
             mode = None
         if not brassage_nuit_intelligent_autorise(mode, self.brassage_nuit_intelligent):
             return False
-        return super().is_night_brassage_slot(heure_actuelle)
+        return self._is_night_brassage_slot_base(heure_actuelle)
 
     # -------------------------- thermal reference memory --------------------------
     @staticmethod
@@ -280,6 +293,6 @@ class DaylightMixin:
                 return None
 
             self.last_temperature_reference_update = now
-            return super().set_value(entity_id, round(reference, 2))
+            return self._write_number_value(entity_id, round(reference, 2))
 
-        return super().set_value(entity_id, value)
+        return self._write_number_value(entity_id, value)

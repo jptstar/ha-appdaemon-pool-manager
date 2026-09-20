@@ -73,4 +73,4 @@ class StatusMixin:
 
         # Reuse the two existing Home Assistant input_text helpers. No third
         # quota helper is required.
-        super().set_messages(decision_txt, detail_enrichi)
+        self._write_messages(decision_txt, detail_enrichi)

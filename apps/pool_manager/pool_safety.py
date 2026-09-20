@@ -44,7 +44,7 @@ def pac_auto_conditions_arret(t_amb, t_24h, t_7j, seuils):
 class SafetyMixin:
     """PAC sequencing, adaptive freeze protection and entity fail-safe logic."""
 
-    def initialize(self):
+    def _initialize_safety(self):
         b = lambda key, default: str(self.args.get(key, default)).lower() == "true"
         self.fail_safe_active = b("fail_safe_active", "true")
         self.gestion_pac_auto = b("gestion_pac_auto", "false")
@@ -86,8 +86,9 @@ class SafetyMixin:
         self.pac_flow_fault_since = None
         self._safety_faults = set()
 
-        super().initialize()
-        self.pac_flow_active_w = float(self.args.get("pac_flow_active_w", self.seuil_pac_veille_w))
+        self.pac_flow_active_w = float(
+            self.args.get("pac_flow_active_w", self.args["seuil_pac_veille_w"])
+        )
 
         for entity in (
             self.entity_temperature_exterieure,
@@ -158,7 +159,7 @@ class SafetyMixin:
                 return float(self.last_valid_water_temp)
             self._fault("temperature_eau", f"température eau indisponible, secours {self.temperature_eau_secours_c:.1f} °C")
             return self.temperature_eau_secours_c
-        return super().get_float_state(entity_id, default)
+        return self._get_float_state_raw(entity_id, default)
 
     def _mode(self):
         try:
@@ -230,8 +231,8 @@ class SafetyMixin:
         if mode == TAB_MODE[2] and getattr(self, "handle_bras", None) is None:
             self.planifier_bras(0)
 
-    def electrolyseur_autorise(self):
-        return False if getattr(self, "hors_gel_continu_active", False) else super().electrolyseur_autorise()
+    def _electrolyse_securite_autorisee(self):
+        return not getattr(self, "hors_gel_continu_active", False)
 
     def rebrassage_hors_gel(self, kwargs):
         mode = self._mode()
@@ -239,7 +240,7 @@ class SafetyMixin:
         if active and mode != TAB_MODE[4]:
             self._apply_freeze_continuous(temp)
             return
-        return super().rebrassage_hors_gel(kwargs)
+        return self._rebrassage_hors_gel_core(kwargs)
 
     # ------------------------------- PAC management -------------------------------
     def _pac_values(self):
@@ -322,6 +323,9 @@ class SafetyMixin:
         self.handle_pac_auto_start = None
         if not self.pac_auto_start_pending:
             return
+        if self.gestion_pac_auto and not self.mode_auto_autorise():
+            self._cancel_pac_start()
+            return
         mode = self._mode()
         if self.derogation_chauffage_active() or mode not in [TAB_MODE[0], TAB_MODE[1]] or not self._pac_window():
             self._cancel_pac_start()
@@ -396,8 +400,11 @@ class SafetyMixin:
             return False
         return True
 
-    def _manage_pac_auto(self):
+    def _manage_pac_saisonnier(self):
         if not self.gestion_pac_auto:
+            return
+        if not self.mode_auto_autorise():
+            self._cancel_pac_start()
             return
         mode = self._mode()
         if mode is None:
@@ -456,12 +463,12 @@ class SafetyMixin:
         if (now - self.pac_flow_fault_since).total_seconds() >= self.pac_flow_fail_timeout_s:
             self._pac_off("circulation pompe non confirmée", post=False)
 
-    def pac_besoin_chauffe(self):
+    def _pac_circulation_securite_requise(self):
         if getattr(self, "pac_auto_start_pending", False) or self._pac_post_active():
             return True
         if getattr(self, "fail_safe_active", False) and self._pac_power_active():
             return True
-        return super().pac_besoin_chauffe()
+        return False
 
     # -------------------------------- entry points --------------------------------
     def safety_input_changed(self, entity, attribute, old, new, kwargs):
@@ -491,7 +498,7 @@ class SafetyMixin:
                 self._pac_off("arrêt forcé", post=False)
             self.hors_gel_continu_active = False
             self._release_freeze(mode)
-            return super().traitement(kwargs)
+            return self._traitement_filtration(kwargs)
 
         if self.gestion_pac_auto and mode == TAB_MODE[2]:
             self._pac_off("mode hors gel")
@@ -501,4 +508,4 @@ class SafetyMixin:
             self._apply_freeze_continuous(temp)
             return
         self._release_freeze(mode)
-        return super().traitement(kwargs)
+        return self._traitement_filtration(kwargs)

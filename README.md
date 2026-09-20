@@ -32,6 +32,7 @@ apps/
     filtration_piscine.py   # AppDaemon entry point
     pool_common.py          # shared helpers and filtration math
     pool_status.py          # status / quota presentation
+    pool_journal.py         # categorized, deduplicated HA event journal
     pool_safety.py          # PAC sequencing, freeze and fail-safe layer
     pool_predictive.py      # weather scoring + legacy trajectory planner
     pool_mpc.py             # adaptive thermal model + receding-horizon MPC
@@ -43,7 +44,24 @@ apps/
     pool_control.py         # main decision and control loop
 ```
 
+Since v0.10, `FiltrationPiscine` explicitly composes domain initialization and
+priority decisions. Domain components no longer override homonymous methods
+through a cooperative MRO chain. The detailed ownership and priority contract
+is documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
 HACS installs the whole `pool_manager` directory. Your AppDaemon `app_dir` must point to the directory used by HACS for AppDaemon apps.
+
+## Development validation
+
+```bash
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
+ruff check --select E9,F63,F7,F82 apps tests
+python -m compileall -q apps/pool_manager
+```
+
+The architecture suite also verifies that domain components have one method
+owner and that the canonical v0.9.1 Home Assistant entity mapping is unchanged.
 
 ## Installation
 

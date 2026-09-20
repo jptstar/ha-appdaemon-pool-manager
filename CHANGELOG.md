@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.10.0 - Explicit core coherence (prepared, not published)
+
+- Replace implicit cooperative-MRO control priority with an explicit domain initialization and decision composition pipeline.
+- Give filtration, PAC policy, MPC, certified calibration, energy/quota arbitration, safety, devices, lifecycle, status and journal one documented owner each.
+- Preserve every existing AppDaemon configuration key, Home Assistant entity ID, selector option, virtual sensor and persisted learning-file contract.
+- Extract Home Assistant journal categorization, translation, deduplication and publication from the control entry point.
+- Normalize `opening`/`closing` cover transitions without corrupting `opening` through the shorter `open` replacement.
+- Add architecture regression tests that reject duplicate component method ownership and unintended `super()` dispatch.
+- Freeze the canonical v0.9.1 Home Assistant entity mapping in an automated compatibility test.
+- Prepare release notes and a mandatory validation checklist without creating a tag or publishing a release.
+
 ## 0.9.1 - Protected pool-temperature calibration and readable journal
 
 - Protect an active certified pool-temperature measurement from normal solar/grid/quota arbitration: once calibration starts, ordinary high house consumption or weak surplus no longer stops the pump. Forced stop, safety and Hors Gel keep higher priority.

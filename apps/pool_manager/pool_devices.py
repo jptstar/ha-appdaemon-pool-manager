@@ -8,7 +8,7 @@ from pool_common import *
 
 class DevicesMixin:
 
-    def get_float_state(self, entity_id, default=0.0):
+    def _get_float_state_raw(self, entity_id, default=0.0):
         try:
             val = self.get_state(entity_id)
             if val in [None, "unknown", "unavailable", ""]:
@@ -348,25 +348,6 @@ class DevicesMixin:
         mode = (self.get_state(self.args["mode_de_fonctionnement"]) or "").strip()
         return mode == TAB_MODE[4]
 
-    def set_consigne_electrolyseur(self, valeur, force=False):
-        if not self.entity_consigne_electrolyseur:
-            return
-
-        try:
-            valeur = max(0.0, min(100.0, float(valeur)))
-        except Exception:
-            valeur = 0.0
-
-        if not force and self.last_consigne_electrolyseur is not None:
-            if abs(float(self.last_consigne_electrolyseur) - valeur) < 0.01:
-                return
-
-        try:
-            self.call_service("number/set_value", entity_id=self.entity_consigne_electrolyseur, value=valeur)
-            self.last_consigne_electrolyseur = valeur
-        except Exception as e:
-            self.log(f"⚠️ Erreur consigne électrolyseur : {e}", log="piscine_log")
-
     def get_consigne_electrolyseur_volet_ouvert(self):
         return self.get_float_state(
             self.entity_consigne_electrolyseur_volet_ouvert,
@@ -386,7 +367,7 @@ class DevicesMixin:
         etat_volet = self.get_state(self.entity_volet_piscine)
         return etat_volet in ["open", "opening"]
 
-    def electrolyseur_autorise(self):
+    def _electrolyse_hydrauliquement_autorisee(self):
         if self.arret_force_actif():
             return False
 
@@ -640,12 +621,6 @@ class DevicesMixin:
         now = datetime.datetime.now()
         return timedelta(hours=now.hour, minutes=now.minute, seconds=now.second)
 
-    def est_dans_plage(self, debut_txt, fin_txt):
-        now_td = self.td_now()
-        debut_td = heure_to_timedelta(debut_txt)
-        fin_td = heure_to_timedelta(fin_txt)
-        return debut_td <= now_td <= fin_td
-
     def est_dans_plage_pac_soleil(self):
         return self.est_dans_plage(self.heure_debut_pac_soleil, self.heure_fin_pac_soleil)
 
@@ -737,7 +712,7 @@ class DevicesMixin:
         except Exception:
             return None
 
-    def pac_besoin_chauffe(self):
+    def _pac_besoin_chauffe_physique(self):
         pac_ok = self.pac_autorisee()
         if pac_ok is not True:
             return False

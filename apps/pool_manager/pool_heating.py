@@ -72,7 +72,7 @@ class HeatingModeMixin(PredictiveHeatingSupport):
     season start, predictive automatic/end-of-season policy and Turbo modes.
     """
 
-    def initialize(self):
+    def _initialize_heating(self):
         self.entity_chauffage = self.args.get("entity_chauffage")
         self.entity_chauffage_timer = self.args.get("entity_chauffage_timer")
         self.entity_chauffage_precedent = self.args.get("entity_chauffage_precedent")
@@ -97,8 +97,6 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         self.chauffage_start_label = None
         self.handle_turbo_fallback = None
         self.chauffage_turbo_ends_at = None
-
-        super().initialize()
 
         if self.entity_chauffage:
             self.listen_state(self.change_chauffage_mode, self.entity_chauffage)
@@ -442,7 +440,7 @@ class HeatingModeMixin(PredictiveHeatingSupport):
     def _manage_pac_auto(self):
         # No selector configured: strict pre-v0.4.4 compatibility.
         if not self.entity_chauffage:
-            return super()._manage_pac_auto()
+            return self._manage_pac_saisonnier()
 
         self._update_predictive_learning()
         mode_chauffage = self.chauffage_mode()
@@ -501,7 +499,7 @@ class HeatingModeMixin(PredictiveHeatingSupport):
 
         if kind == "auto":
             self._cancel_chauffage_start()
-            result = super()._manage_pac_auto()
+            result = self._manage_pac_saisonnier()
             if self._pac_state() == "heat":
                 self._set_pac_preset(self.chauffage_preset_auto)
             return result
@@ -514,7 +512,7 @@ class HeatingModeMixin(PredictiveHeatingSupport):
                 "fin de saison",
             )
 
-    def pac_besoin_chauffe(self):
+    def _pac_circulation_chauffage_requise(self):
         # Certified water measurement requires circulation even though the PAC
         # itself may deliberately remain off during the 70% / 15-minute mixing
         # cycle. Reuse the existing pump-demand path instead of creating a
@@ -533,4 +531,4 @@ class HeatingModeMixin(PredictiveHeatingSupport):
                 return True
             if kind in {"auto", "end_season"} and self.chauffage_predictif:
                 return bool(self.chauffage_predictif_heat_requested)
-        return super().pac_besoin_chauffe()
+        return None

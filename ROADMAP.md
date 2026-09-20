@@ -1,5 +1,14 @@
 # Roadmap
 
+## 0.10.x - Core coherence
+
+- [x] Replace ambiguous cooperative-MRO priority with explicit composition.
+- [x] Document one owner for filtration, PAC, MPC, calibration, energy, safety, devices and journal behavior.
+- [x] Freeze the v0.9.1 Home Assistant entity contract in tests.
+- [x] Add release notes and validation gates without publishing v0.10.0.
+- [ ] Complete target-installation AppDaemon startup and production observer validation.
+- [ ] Publish only after every v0.10.0 validation gate is signed off.
+
 ## 0.1.x - Safe baseline
 
 - Preserve current behavior while fixing hard safety/consistency bugs.

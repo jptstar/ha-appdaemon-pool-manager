@@ -11,7 +11,7 @@ from pool_common import TAB_MODE
 class RuntimeStabilityMixin:
     """Keep remote pump ownership stable when local iSaver control is disabled."""
 
-    def initialize(self):
+    def _initialize_runtime_stability(self):
         # Aquagem/iSaver local control can regain authority roughly one minute
         # after the last remote write. Refresh the last requested speed before
         # that watchdog expires whenever Pool Manager owns the pump.
@@ -34,8 +34,6 @@ class RuntimeStabilityMixin:
             self.pompe_remote_keepalive_enabled = (
                 str(configured).strip().lower() in {"1", "true", "yes", "on"}
             )
-
-        super().initialize()
 
     def _maintain_remote_pump_authority(self, now=None):
         """Re-assert automatic pump authority before an iSaver local handover.
@@ -99,5 +97,5 @@ class RuntimeStabilityMixin:
 
     def check_etats_speciaux(self, kwargs):
         """Run normal housekeeping, then keep remote pump ownership alive."""
-        super().check_etats_speciaux(kwargs)
+        self._check_etats_speciaux_core(kwargs)
         self._maintain_remote_pump_authority()

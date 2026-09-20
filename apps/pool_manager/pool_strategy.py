@@ -25,7 +25,7 @@ class StrategyMixin:
         else:
             return max(self.vitesse_min_filtration_utile, self.vitesse_rattrapage_palier_4)
 
-    def temps_restant_plage_solaire_h(self):
+    def _temps_restant_plage_solaire_fixe_h(self):
         now_td = self.td_now()
         fin = heure_to_timedelta(self.heure_fin_solaire)
         if now_td >= fin:
@@ -167,7 +167,7 @@ class StrategyMixin:
             pass
         self.set_debug_w(" | ".join(debug_parts))
 
-    def stabilite_surplus_ok(self, surplus_disponible):
+    def _stabilite_surplus_electrique_ok(self, surplus_disponible):
         now = datetime.datetime.now()
         condition_ok = surplus_disponible >= self.seuil_surplus_demarrage_w
 
@@ -193,7 +193,7 @@ class StrategyMixin:
             debug_parts.append(f"PV {int(round(pv_power))}W")
         self.set_debug_w(" | ".join(debug_parts))
 
-    def is_night_brassage_slot(self, heure_actuelle):
+    def _is_night_brassage_slot_base(self, heure_actuelle):
         # Conservé volontairement : brassage nuit possible toutes les heures.
         heure_entiere = heure_actuelle.hour
         return (heure_entiere % 1 == 0) and (0 <= heure_actuelle.minute < 10)

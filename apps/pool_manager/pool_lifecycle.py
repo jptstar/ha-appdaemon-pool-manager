@@ -8,7 +8,7 @@ from pool_common import *
 
 class LifecycleMixin:
 
-    def initialize(self):
+    def _initialize_lifecycle(self):
         self.fin_tempo = 0
 
         self.stabilisation_active = False
@@ -459,7 +459,7 @@ class LifecycleMixin:
         self.mode_actif = None
         self.traitement(kwargs)
 
-    def check_etats_speciaux(self, kwargs):
+    def _check_etats_speciaux_core(self, kwargs):
         now = datetime.datetime.now()
 
         self.maj_cumul_filtration()
@@ -520,7 +520,7 @@ class LifecycleMixin:
         if self.prochain_bras and not self.lock_text:
             self.set_messages(f"Hors gel | {self.prochain_bras.strftime('%H:%M')}", self.prochain_bras.strftime('%H:%M'))
 
-    def rebrassage_hors_gel(self, kwargs):
+    def _rebrassage_hors_gel_core(self, kwargs):
         mode = self.get_state(self.args["mode_de_fonctionnement"]).strip()
         if mode != TAB_MODE[2]:
             self.handle_bras = None
@@ -552,7 +552,7 @@ class LifecycleMixin:
         delay_sec = int((duree_bras + intervalle_bras) * 60)
         self.planifier_bras(delay_sec)
 
-    def progression_attendue(self, objectif_temps_eq):
+    def _progression_attendue_fixe(self, objectif_temps_eq):
         if objectif_temps_eq <= 0:
             return 0.0
 
@@ -609,11 +609,11 @@ class LifecycleMixin:
         except Exception:
             pass
 
-    def set_messages(self, short_msg, detail_msg=""):
+    def _write_messages(self, short_msg, detail_msg=""):
         self.set_textvalue(self.args["message_filtration_piscine"], short_msg)
         self.set_detail_text(detail_msg)
 
-    def set_value(self, entity_id, value):
+    def _write_number_value(self, entity_id, value):
         try:
             self.call_service("input_number/set_value", entity_id=entity_id, value=value)
         except Exception:

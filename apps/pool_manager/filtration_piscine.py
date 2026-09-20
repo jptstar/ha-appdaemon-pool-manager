@@ -46,19 +46,82 @@ class FiltrationPiscine(
     @staticmethod
     def _pool_log_category(message):
         text = str(message or "").casefold()
-        if any(word in text for word in ("sécurité", "securite", "hors gel", "fail-safe", "⚠", "erreur", "fault")):
+        if any(
+            word in text
+            for word in (
+                "sécurité",
+                "securite",
+                "hors gel",
+                "fail-safe",
+                "⚠",
+                "erreur",
+                "fault",
+            )
+        ):
             return "SÉCURITÉ"
+        if any(word in text for word in ("apprentissage", "pertes nuit", "°c/h")):
+            return "APPRENTISSAGE"
+        if "électrolys" in text or "electrolys" in text:
+            return "ÉLECTROLYSE"
         if any(word in text for word in ("volet", "cover")):
             return "VOLET"
-        if any(word in text for word in ("mpc", "prédictif", "predictif", "forecast", "prévision")):
-            return "MPC"
-        if any(word in text for word in ("température eau certifiée", "mesure", "stabilisation", "temperature")):
+        if any(
+            word in text
+            for word in (
+                "température bassin certifiée",
+                "température eau certifiée",
+                "mesure température",
+                "stabilisation",
+                "calibration",
+            )
+        ):
             return "MESURE"
         if any(word in text for word in ("pac", "chauffage", "smart", "turbo")):
             return "PAC"
-        if any(word in text for word in ("pompe", "vitesse", "circulation", "filtration")):
+        if any(word in text for word in ("pompe", "vitesse", "circulation")):
             return "POMPE"
+        if any(
+            word in text
+            for word in (
+                "filtration",
+                "quota",
+                "surplus",
+                "rattrapage",
+                "complément",
+            )
+        ):
+            return "FILTRATION"
+        if any(
+            word in text
+            for word in ("mpc", "prédictif", "predictif", "prévision", "forecast")
+        ):
+            return "MPC"
         return "SYSTÈME"
+
+    @staticmethod
+    def _pool_log_french(message):
+        """Translate internal controller tokens before they reach the HA journal."""
+        text = str(message or "").strip()
+        replacements = (
+            ("startup_calibration", "mesure au démarrage"),
+            ("morning_decision", "décision du matin"),
+            ("heating_learning", "apprentissage chauffage"),
+            ("target_check", "contrôle de consigne"),
+            ("temperature_stabilization", "stabilisation température"),
+            ("end_season", "fin de saison"),
+            ("season_start", "début de saison"),
+            ("PREHEAT", "préchauffage"),
+            ("MAINTAIN", "maintien baignade"),
+            ("PRESERVE", "préservation"),
+            ("WAIT", "attente"),
+            ("Heat/", "chauffage "),
+            ("closed", "fermé"),
+            ("open", "ouvert"),
+            (" -> ", " → "),
+        )
+        for source, target in replacements:
+            text = text.replace(source, target)
+        return text
 
     def _publish_pool_manager_log(self, message):
         entity = getattr(self, "entity_pool_manager_log", None)
@@ -66,18 +129,39 @@ class FiltrationPiscine(
             return
 
         now = datetime.datetime.now()
-        text = str(message or "").strip()
+        text = self._pool_log_french(message)
+        if not text:
+            return
         category = self._pool_log_category(text)
 
         history = list(getattr(self, "_pool_manager_log_history", []))
+        # The old comparison included the timestamp, so an identical status
+        # emitted every 30 s was always considered new. The journal is now
+        # event-based: consecutive identical semantic events are ignored.
+        if history:
+            last = history[-1]
+            if (
+                last.get("category") == category
+                and last.get("message") == text
+            ):
+                return
+
         entry = {
             "timestamp": now.isoformat(timespec="seconds"),
             "category": category,
             "message": text[:500],
         }
-        if not history or history[-1] != entry:
-            history.append(entry)
-        history = history[-20:]
+        history.append(entry)
+        history_size = int(
+            max(
+                10,
+                min(
+                    100,
+                    getattr(self, "pool_manager_log_history_size", 50),
+                ),
+            )
+        )
+        history = history[-history_size:]
         self._pool_manager_log_history = history
 
         state = f"{now.strftime('%H:%M:%S')} • {category} • {text}"
@@ -95,6 +179,7 @@ class FiltrationPiscine(
                 "message": text,
                 "history": history,
                 "history_size": len(history),
+                "history_limit": history_size,
             },
             replace=True,
         )
@@ -119,7 +204,21 @@ class FiltrationPiscine(
             "entity_pool_manager_log",
             "sensor.pool_manager_log",
         )
+        self.pool_manager_log_history_size = int(
+            float(self.args.get("pool_manager_log_history_size", 50))
+        )
         self._pool_manager_log_history = []
+        try:
+            previous_history = self.get_state(
+                self.entity_pool_manager_log,
+                attribute="history",
+            )
+            if isinstance(previous_history, list):
+                self._pool_manager_log_history = previous_history[
+                    -self.pool_manager_log_history_size :
+                ]
+        except Exception:
+            pass
 
         # Cold-water chlorination protection. The lock starts conservative so an
         # AppDaemon restart around the threshold cannot briefly enable the cell.

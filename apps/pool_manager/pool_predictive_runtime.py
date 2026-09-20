@@ -1119,6 +1119,7 @@ class PredictiveHeatingSupport:
         self._register_certified_measurement(now, float(water))
         return True
 
+    @staticmethod
     def _crosses_midnight(start, end):
         return start.date() != end.date()
 

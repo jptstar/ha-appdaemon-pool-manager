@@ -136,8 +136,16 @@ def test_below_70_percent_is_raised_to_certification_minimum(tmp_path):
     ) is False
     assert app.chauffage_predictif_certified_water_c is None
 
+    # After the hydraulic delay, the sensor must remain stable for 2 more
+    # minutes before the value is certified as representative of the pool.
     assert app._update_certified_measurement(
         start + datetime.timedelta(minutes=15)
+    ) is False
+    assert app._update_certified_measurement(
+        start + datetime.timedelta(minutes=16, seconds=59)
+    ) is False
+    assert app._update_certified_measurement(
+        start + datetime.timedelta(minutes=17)
     ) is True
     assert app.chauffage_predictif_certified_water_c == 25.0
 
@@ -157,6 +165,9 @@ def test_temperature_certifies_after_full_tempo_eau_at_70(tmp_path):
     app.water = 25.06
     assert app._update_certified_measurement(
         start + datetime.timedelta(minutes=15)
+    ) is False
+    assert app._update_certified_measurement(
+        start + datetime.timedelta(minutes=17)
     ) is True
 
     assert app.chauffage_predictif_certified_water_c == 25.06
@@ -175,6 +186,9 @@ def test_speed_above_70_is_preserved_during_calibration(tmp_path):
 
     assert app._update_certified_measurement(
         start + datetime.timedelta(minutes=15)
+    ) is False
+    assert app._update_certified_measurement(
+        start + datetime.timedelta(minutes=17)
     ) is True
     assert app.speed == 85
 
@@ -201,6 +215,9 @@ def test_speed_dip_after_reference_does_not_restart_calibration(tmp_path):
     app.water = 25.12
     assert app._update_certified_measurement(
         start + datetime.timedelta(minutes=15)
+    ) is False
+    assert app._update_certified_measurement(
+        start + datetime.timedelta(minutes=17)
     ) is True
     assert app.chauffage_predictif_certified_water_c == 25.12
 
@@ -437,3 +454,79 @@ def test_forced_turbo_countdown_uses_deadline_not_static_timer_remaining(tmp_pat
         start + datetime.timedelta(minutes=37, seconds=19)
     )
     assert later_remaining == 5 * 3600 + 22 * 60 + 41
+
+
+def test_sensor_must_be_stable_for_full_window_before_certification(tmp_path):
+    app = _make_runtime(tmp_path)
+    app.speed = 70
+    app.chauffage_predictif_measurement_active = True
+    app.chauffage_predictif_measurement_purpose = "decision"
+
+    start = datetime.datetime(2026, 9, 18, 8, 0)
+    assert app._update_certified_measurement(start) is False
+
+    # First post-circulation value starts the stability window.
+    app.water = 25.0
+    assert app._update_certified_measurement(
+        start + datetime.timedelta(minutes=15)
+    ) is False
+
+    # A pipe-water transition larger than 0.15 °C restarts stability.
+    app.water = 25.4
+    assert app._update_certified_measurement(
+        start + datetime.timedelta(minutes=16)
+    ) is False
+    assert app.chauffage_predictif_measurement_stable_temp == 25.4
+
+    app.water = 25.45
+    assert app._update_certified_measurement(
+        start + datetime.timedelta(minutes=17, seconds=59)
+    ) is False
+    assert app._update_certified_measurement(
+        start + datetime.timedelta(minutes=18)
+    ) is True
+    assert app.chauffage_predictif_certified_water_c == 25.45
+
+
+def test_pump_stop_invalidates_in_flight_measurement(tmp_path):
+    app = _make_runtime(tmp_path)
+    app.chauffage_predictif_measurement_active = True
+    app.chauffage_predictif_measurement_purpose = "decision"
+    app.chauffage_predictif_measurement_started_at = datetime.datetime(
+        2026, 9, 18, 8, 0
+    )
+    app.chauffage_predictif_measurement_stable_at = datetime.datetime(
+        2026, 9, 18, 8, 15
+    )
+    app.chauffage_predictif_measurement_stable_temp = 25.0
+
+    assert app._interrupt_predictive_measurement("pompe arrêtée") is True
+    assert app.chauffage_predictif_measurement_active is False
+    assert app.chauffage_predictif_measurement_started_at is None
+    assert app.chauffage_predictif_measurement_stable_at is None
+
+
+def test_measurement_progress_includes_circulation_and_stability_countdown(tmp_path):
+    app = _make_runtime(tmp_path)
+    app.chauffage_predictif_measurement_active = True
+    app.chauffage_predictif_measurement_purpose = "decision"
+
+    start = datetime.datetime(2026, 9, 18, 8, 0)
+    app.chauffage_predictif_measurement_started_at = start
+
+    elapsed, remaining, phase = app._measurement_progress(
+        start + datetime.timedelta(minutes=5)
+    )
+    assert elapsed == 300
+    assert remaining == 12 * 60
+    assert phase == "circulating"
+
+    app.chauffage_predictif_measurement_stable_at = start + datetime.timedelta(
+        minutes=15
+    )
+    elapsed, remaining, phase = app._measurement_progress(
+        start + datetime.timedelta(minutes=16)
+    )
+    assert elapsed == 16 * 60
+    assert remaining == 60
+    assert phase == "stability"

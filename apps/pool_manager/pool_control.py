@@ -58,6 +58,58 @@ class ControlMixin:
 
         texte_plage = f"{str(h_debut).zfill(8)[:5]}-{str(h_pivot).zfill(8)[:5]}-{str(h_fin).zfill(8)[:5]}"
 
+        # A certified pool-temperature measurement is a short protected cycle.
+        # Once started, normal surplus / grid-import / quota optimization must
+        # not throw away the hydraulic stabilization already achieved. Safety,
+        # forced stop and Hors Gel remain higher-priority and are handled above
+        # or by their dedicated mode.
+        if (
+            bool(getattr(self, "chauffage_predictif_measurement_active", False))
+            and mode in [TAB_MODE[0], TAB_MODE[1], TAB_MODE[3]]
+        ):
+            minimum = int(
+                getattr(self, "chauffage_predictif_mesure_vitesse_pct", 70)
+            )
+            if not self.pompe_est_on():
+                self.start_pump_with_delayed_speed(
+                    minimum,
+                    delay_s=2,
+                    context="mesure_temperature",
+                )
+                vitesse_appliquee = minimum
+            else:
+                vitesse_appliquee = self.get_fan_percentage()
+                if vitesse_appliquee is None:
+                    vitesse_appliquee = minimum
+                elif vitesse_appliquee < minimum:
+                    vitesse_appliquee = self.set_pump_percentage(
+                        minimum,
+                        force=True,
+                    )
+
+            _, restant_mesure, phase_mesure = self._measurement_progress()
+            if restant_mesure is None:
+                restant_txt = ""
+            else:
+                restant_mesure = max(0, int(restant_mesure))
+                mm = restant_mesure // 60
+                ss = restant_mesure % 60
+                restant_txt = f" • reste {mm:02d}:{ss:02d}"
+
+            phase_txt = {
+                "raising_flow": "mise en circulation",
+                "circulating": "brassage",
+                "stability": "stabilité sonde",
+            }.get(phase_mesure, "mesure")
+
+            self.set_messages(
+                f"Mesure température | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
+                f"{vitesse_appliquee}% • {phase_txt}{restant_txt} • "
+                f"circulation protégée • {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
+            )
+            self.format_texte_solaire_debug(vitesse_appliquee)
+            return
+
         if self.stabilisation_active or self.brassage_en_cours:
             self.maj_electrolyseur()
             if not self.lock_text:
@@ -160,7 +212,7 @@ class ControlMixin:
                 self.format_texte_solaire_debug(vitesse_appliquee)
                 return
 
-            self.turn_off_pompe_mem()
+            self.turn_off_pompe_mem(reason="hors plage de filtration température")
             self.set_messages(
                 f"Température | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
                 f"{texte_plage} | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
@@ -215,7 +267,7 @@ class ControlMixin:
                     self.start_night_brassage(now_dt, filtre_temps_eq, objectif_temps_eq)
                     return
 
-                self.turn_off_pompe_mem()
+                self.turn_off_pompe_mem(reason="attente nocturne")
                 self.set_messages(
                     f"Nuit attente | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
                     f"{filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
@@ -224,7 +276,7 @@ class ControlMixin:
                 return
 
             if objectif_temps_eq <= 0:
-                self.turn_off_pompe_mem()
+                self.turn_off_pompe_mem(reason="aucune filtration nécessaire")
                 self.debut_manque_soleil = None
                 self.reset_stabilite_surplus()
                 self.reset_pid()
@@ -249,7 +301,7 @@ class ControlMixin:
                     ):
                         return
 
-                self.turn_off_pompe_mem()
+                self.turn_off_pompe_mem(reason="objectif filtration atteint")
                 self.debut_manque_soleil = None
                 self.reset_stabilite_surplus()
                 self.reset_pid()
@@ -430,7 +482,13 @@ class ControlMixin:
                         return
 
                     if duree_manque >= tempo_anti_coupure_active:
-                        self.turn_off_pompe_mem()
+                        self.turn_off_pompe_mem(
+                            reason=(
+                                "consommation maison trop élevée"
+                                if surplus_brut <= 0
+                                else "surplus solaire insuffisant"
+                            )
+                        )
                         self.debut_manque_soleil = None
                         self.reset_pid()
                         self.set_messages(

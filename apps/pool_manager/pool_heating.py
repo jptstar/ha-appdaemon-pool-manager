@@ -324,13 +324,46 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         self.chauffage_start_preset = None
         self.chauffage_start_label = None
 
+    def _apply_pac_heat_and_log(self, preset, label):
+        before_state = self._pac_state()
+        try:
+            before_preset = self.get_state(
+                self.entity_pac_climate,
+                attribute="preset_mode",
+            )
+        except Exception:
+            before_preset = None
+
+        if not self._set_pac_heat(preset, label):
+            return False
+
+        before_name = str(before_preset or "").strip()
+        after_name = str(preset or "").strip()
+        same_preset = before_name.casefold() == after_name.casefold()
+        if before_state == "heat" and same_preset:
+            return True
+
+        try:
+            if before_state == "heat" and before_name and not same_preset:
+                self.log(
+                    f"PAC : passage {before_name} → {after_name} ({label}).",
+                    log="piscine_log",
+                )
+            else:
+                self.log(
+                    f"PAC démarrée : chauffage {after_name} ({label}).",
+                    log="piscine_log",
+                )
+        except Exception:
+            pass
+        return True
+
     def _request_chauffage_start(self, preset, label):
         if not self._chauffage_pool_mode_autorise():
             return
         if self._pump_flow_ok():
             self._cancel_chauffage_start()
-            if self._set_pac_heat(preset, label):
-                self.log(f"PAC {label}: circulation confirmée -> Heat/{preset}", log="piscine_log")
+            self._apply_pac_heat_and_log(preset, label)
             return
 
         if self.chauffage_start_deadline is None:
@@ -363,8 +396,7 @@ class HeatingModeMixin(PredictiveHeatingSupport):
             preset = self.chauffage_start_preset or self.chauffage_preset_smart
             label = self.chauffage_start_label or "chauffage"
             self._cancel_chauffage_start()
-            if self._set_pac_heat(preset, label):
-                self.log(f"PAC {label}: circulation confirmée -> Heat/{preset}", log="piscine_log")
+            self._apply_pac_heat_and_log(preset, label)
             self.traitement({})
             return
         self._ensure_pac_flow()

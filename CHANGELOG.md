@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.1 - Protected pool-temperature calibration and readable journal
+
+- Protect an active certified pool-temperature measurement from normal solar/grid/quota arbitration: once calibration starts, ordinary high house consumption or weak surplus no longer stops the pump. Forced stop, safety and Hors Gel keep higher priority.
+- Treat every real pump interruption during a calibration as invalidating the sample; the next attempt restarts the complete hydraulic circulation delay from zero.
+- Require the physical pipe sensor to remain stable after hydraulic mixing before certification. Defaults are 120 s of stability within 0.15 °C after `tempo_eau`.
+- Extend `measurement_remaining_seconds` across both circulation and sensor-stability phases and publish `measurement_stability_seconds` plus `measurement_max_variation_c`.
+- Keep the PAC off during decision calibration and continue MPC operation from the best estimated pool temperature until a new certified value is available.
+- Turn `sensor.pool_manager_log` into an event journal: consecutive identical events are ignored, internal English tokens are translated to French, and history defaults to 50 meaningful events.
+- Journal pump start/stop events, measurement starts/interruption/certification, PAC state changes and meaningful MPC plan changes while suppressing repeated “PAC already heating” messages.
+- Keep the three legacy status helpers (`message_filtration_piscine`, detail and debug W) unchanged for current-state/debug compatibility; the virtual journal remains the chronological source of important events.
+- No new Home Assistant helper is required.
+
 ## 0.9.0 - Full-horizon comfort and energy planning
 
 - Extend predictive heating from a single next-bathing target to a joint MPC plan across the complete available weather horizon (up to 15 days).

@@ -153,11 +153,13 @@ chauffage_predictif_mpc_pas_temperature_c: 0.2
 chauffage_predictif_mpc_puissance_smart_w: 1200
 chauffage_predictif_mpc_puissance_turbo_w: 1900
 
-# Pool-water stabilization is shared with normal filtration:
-# tempo_eau is the delay after a meaningful pump stop.
-# 70% is the temporary minimum during a certified temperature calibration.
-# Higher current speeds are preserved; lower speeds are raised only for calibration.
+# Certified pool-water measurement:
+# tempo_eau is the hydraulic mixing delay after a pump start.
+# 70% is the temporary minimum during calibration; higher speeds are preserved.
+# After mixing, the pipe probe must remain stable for 120 s within 0.15 °C.
 chauffage_predictif_mesure_vitesse_pct: 70
+chauffage_predictif_mesure_stabilite_s: 120
+chauffage_predictif_mesure_variation_max_c: 0.15
 
 # Optional absolute recoverability floor:
 # chauffage_predictif_temperature_min_eau_c: 22
@@ -165,11 +167,15 @@ chauffage_predictif_mesure_vitesse_pct: 70
 
 ### Certified water temperature
 
-A pipe sensor is not treated as the pool merely because the pump has just started. Pool Manager now uses the same hydraulic stabilization already used by normal filtration: after a meaningful stop, the probe is ignored until `tempo_eau` has elapsed. Short pump interruptions do not re-arm a full stabilization cycle.
+A pipe sensor is not treated as the pool merely because the pump has just started. Normal filtration still uses its hydraulic `tempo_eau` logic, but a **certified predictive measurement is stricter**: every real pump interruption invalidates the in-flight calibration and the next attempt restarts the complete circulation delay from zero.
 
-Certified calibration uses `chauffage_predictif_mesure_vitesse_pct` (**70% by default**) as a temporary minimum. If the automatic strategy is already running the pump at 70% or more, Pool Manager leaves that speed unchanged. If it is below 70%, Pool Manager raises it to 70% only for the calibration. Once the reference speed has been confirmed, the `tempo_eau` clock is monotonic: a later transient speed-report dip does not restart the full delay. When calibration finishes, speed authority is immediately returned to the normal automatic strategy. `mem_temp` remains the operational fallback while the pump is stopped and is never accepted as a new learning sample.
+Certified calibration uses `chauffage_predictif_mesure_vitesse_pct` (**70% by default**) as a temporary minimum. If the automatic strategy is already running the pump at 70% or more, Pool Manager leaves that speed unchanged. If it is below 70%, Pool Manager raises it to 70% only for calibration. A transient speed-report dip does not restart the clock once the reference flow has genuinely been reached, but an actual pump stop always does.
 
-Calibration is bounded in v0.8.3. By default the pump has 300 s to confirm the reference speed, and a stuck `fin_tempo` gate or unavailable physical probe is released after `tempo_eau + 300 s`. After such a failure, Pool Manager continues from its best available temperature estimate and waits 900 s before retrying certification. The optional settings are `chauffage_predictif_mesure_timeout_grace_s` and `chauffage_predictif_mesure_retry_s`.
+Since v0.9.1, reaching `tempo_eau` is not enough by itself. The physical pipe probe must then remain stable for `chauffage_predictif_mesure_stabilite_s` (**120 s by default**) within `chauffage_predictif_mesure_variation_max_c` (**0.15 °C by default**) before the value is certified as pool temperature. A larger change restarts only the final stability window. This is designed for installations where stagnant water in a technical room can initially differ by several degrees from the real pool after circulation resumes.
+
+Once a certified measurement has started, normal solar/grid/quota optimization is temporarily suspended for that short hydraulic cycle: ordinary high house consumption or weak surplus cannot stop the pump and waste the calibration already achieved. Forced stop, safety rules and Hors Gel remain higher priority. The PAC stays off during a decision calibration. When certification finishes, speed authority immediately returns to the normal strategy. `mem_temp` remains an operational fallback while the pump is stopped and is never accepted as a learning sample.
+
+Calibration remains bounded. By default the pump has 300 s to confirm the reference speed, and a stuck circulation/stability phase is released instead of holding control indefinitely. After failure, Pool Manager continues from its best estimated pool temperature and waits 900 s before retrying certification. The optional settings are `chauffage_predictif_mesure_timeout_grace_s` and `chauffage_predictif_mesure_retry_s`.
 
 If predictive heating genuinely needs to start while the pump is off, circulation may be started because heating itself requires flow. The controller then waits for the normal `tempo_eau` stabilization before using the physical probe for the final heating decision.
 
@@ -256,13 +262,16 @@ The forced-heating countdown is based on Pool Manager's own deadline (with Home 
 
 ### Pool Manager log sensor
 
-Pool Manager mirrors every event written to the dedicated `piscine_log` AppDaemon log into a virtual Home Assistant entity. By default it is:
+Pool Manager publishes one central chronological event journal:
 
 ```yaml
 entity_pool_manager_log: sensor.pool_manager_log
+pool_manager_log_history_size: 50
 ```
 
-No Home Assistant helper is required. The entity state contains the latest event; attributes expose its timestamp, category, complete message and the last 20 events in `history`.
+No Home Assistant helper is required. Since v0.9.1 this is deliberately an **event journal**, not another live telemetry stream. It records meaningful changes such as pump start/stop, calibration start/interruption/certification, PAC start/stop or preset changes, MPC decisions, cover events, learning, electrolysis and safety faults. Consecutive identical events are ignored, and user-visible journal messages are normalized to French instead of exposing internal tokens such as `end_season`, `MAINTAIN` or `Heat/Smart`.
+
+The existing `message_filtration_piscine`, detail helper and debug-W helper remain current-state/debug outputs for compatibility; they are not duplicated into journal history merely because their values refresh.
 
 ### Bathing score sensor
 

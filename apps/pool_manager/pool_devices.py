@@ -233,7 +233,9 @@ class DevicesMixin:
             forced_reason = reason or (
                 "arrêt forcé" if self.arret_force_actif() else "arrêt de sécurité"
             )
-            self.turn_off_pompe_direct(reason=forced_reason)
+            self.pending_stop_reason = forced_reason
+            self.turn_off_pompe_direct()
+            self.pending_stop_reason = None
             return True
 
         # A certified temperature measurement is a short, protected hydraulic
@@ -281,6 +283,8 @@ class DevicesMixin:
         return True
 
     def turn_off_pompe_direct(self, reason=None):
+        if reason is None:
+            reason = getattr(self, "pending_stop_reason", None)
         was_on = self.pompe_est_on()
         if was_on:
             self.call_service("fan/turn_off", entity_id=self.args["cde_pompe"])
@@ -305,7 +309,8 @@ class DevicesMixin:
                 self.consigne_electrolyseur_arret,
                 force=True,
             )
-            self.turn_off_pompe_direct(reason=reason)
+            self.pending_stop_reason = reason
+            self.turn_off_pompe_direct()
         finally:
             self.handle_delayed_stop = None
             self.stop_sequence_active = False

@@ -59,7 +59,7 @@ pool_manager:
   vitesse_min_pac_active: 47
   marge_temp_pac_c: 0.3
 
-  # Adaptive predictive heating (v0.9: full-horizon Adaptive Thermal Model + MPC)
+  # Adaptive predictive heating (v0.9.1: full-horizon MPC + protected calibration)
   chauffage_predictif: true
   chauffage_predictif_mpc: true
   entity_meteo_chauffage_predictif: weather.home
@@ -79,10 +79,12 @@ pool_manager:
   chauffage_predictif_perte_nuit_delta10_c_par_h: 0.05
   chauffage_predictif_apprentissage: true
 
-  # Certified water temperature: 70% is a temporary minimum and tempo_eau
-  # is the shared stabilization duration. The calibration is bounded so a
-  # lagging speed report or unavailable probe cannot leave it active forever.
+  # Certified water temperature: 70% is a temporary minimum. After tempo_eau,
+  # the pipe probe must stay stable for 120 s within 0.15 °C. Normal energy
+  # arbitration cannot stop an active calibration; safety/forced stop still can.
   chauffage_predictif_mesure_vitesse_pct: 70
+  chauffage_predictif_mesure_stabilite_s: 120
+  chauffage_predictif_mesure_variation_max_c: 0.15
   chauffage_predictif_mesure_fraiche_s: 21600
   chauffage_predictif_mesure_timeout_grace_s: 300
   chauffage_predictif_mesure_retry_s: 900

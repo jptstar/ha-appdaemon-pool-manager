@@ -143,3 +143,62 @@ def test_intelligent_mode_self_heals_local_control_switch_if_reenabled():
         datetime.datetime(2026, 9, 19, 9, 1, 0)
     ) is False
     assert sync_calls == [TAB_MODE[1]]
+
+
+def test_pool_manager_log_translates_internal_tokens_and_deduplicates():
+    app = make_app(TAB_MODE[1])
+    app.entity_pool_manager_log = "sensor.pool_manager_log"
+    app.pool_manager_log_history_size = 50
+    app._pool_manager_log_history = []
+    calls = []
+    app.set_state = lambda entity, **kwargs: calls.append((entity, kwargs))
+
+    raw = "PAC prédictif end_season MAINTAIN: circulation confirmée -> Heat/Smart"
+    app._publish_pool_manager_log(raw)
+    app._publish_pool_manager_log(raw)
+
+    assert len(calls) == 1
+    message = calls[0][1]["attributes"]["message"]
+    assert "end_season" not in message
+    assert "MAINTAIN" not in message
+    assert "Heat/" not in message
+    assert "fin de saison" in message
+    assert "maintien baignade" in message
+    assert "chauffage Smart" in message
+
+
+def test_pool_manager_log_accepts_same_event_again_after_a_different_event():
+    app = make_app(TAB_MODE[1])
+    app.entity_pool_manager_log = "sensor.pool_manager_log"
+    app.pool_manager_log_history_size = 50
+    app._pool_manager_log_history = []
+    calls = []
+    app.set_state = lambda entity, **kwargs: calls.append((entity, kwargs))
+
+    app._publish_pool_manager_log("Pompe démarrée : mesure température")
+    app._publish_pool_manager_log("Température bassin certifiée : 28.20 °C")
+    app._publish_pool_manager_log("Pompe démarrée : mesure température")
+
+    assert len(calls) == 3
+    assert len(app._pool_manager_log_history) == 3
+
+
+def test_pump_off_callback_invalidates_predictive_measurement():
+    app = make_app(TAB_MODE[1])
+    app.fin_tempo = 1
+    app.last_pompe_off = datetime.datetime(2026, 9, 20, 8, 0)
+    interrupted = []
+    app._interrupt_predictive_measurement = (
+        lambda reason: interrupted.append(reason) or True
+    )
+
+    app.raz_temporisation_mesure_temp(
+        "fan.pool",
+        None,
+        "on",
+        "off",
+        {},
+    )
+
+    assert app.fin_tempo == 0
+    assert interrupted == ["pompe arrêtée pendant la mesure"]

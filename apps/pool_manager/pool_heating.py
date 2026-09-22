@@ -297,13 +297,19 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         if not self._available(self.entity_pac_climate):
             self._fault("pac_climate", f"PAC indisponible ({label})")
             return False
+        # A renewed heat decision cancels any older predictive WAIT request.
+        self.pac_deferred_stop_reason = None
         try:
-            if self._pac_state() != "heat":
+            before_state = self._pac_state()
+            if before_state != "heat":
+                if self._pac_start_deferred(label):
+                    return False
                 self.call_service(
                     "climate/set_hvac_mode",
                     entity_id=self.entity_pac_climate,
                     hvac_mode="heat",
                 )
+                self._pac_mark_started()
             self._set_pac_preset(preset)
             self._recover("pac_climate")
             return True
@@ -358,6 +364,9 @@ class HeatingModeMixin(PredictiveHeatingSupport):
 
     def _request_chauffage_start(self, preset, label):
         if not self._chauffage_pool_mode_autorise():
+            return
+        if self._pac_start_deferred(label):
+            self._cancel_chauffage_start()
             return
         if self._pump_flow_ok():
             self._cancel_chauffage_start()

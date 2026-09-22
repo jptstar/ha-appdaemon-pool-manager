@@ -1960,18 +1960,19 @@ class PredictiveHeatingSupport:
         )
         self.chauffage_predictif_last_plan = plan
 
-        # WAIT/PRESERVE-without-heat must stop the PAC immediately. Temperature
-        # sampling only piggybacks on circulation that is already running; it
-        # never owns pump speed and never creates an autonomous pump cycle.
+        # WAIT/PRESERVE-without-heat requests a stop, but a compressor that has
+        # just started keeps its configured minimum run time. Safety and
+        # explicit user stops continue to bypass this predictive protection.
         if not plan.get("should_heat"):
             self.chauffage_predictif_heat_requested = False
             self.chauffage_predictif_heat_target_c = None
             self._cancel_chauffage_start()
 
-            if self._pac_power_active():
+            if self._pac_state() == "heat" or self._pac_power_active():
                 self._pac_off(
                     f"chauffage prédictif: {plan.get('reason', 'attente')}",
                     post=True,
+                    respect_min_on=True,
                 )
 
             if (

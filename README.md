@@ -128,6 +128,19 @@ climate -> Off
         -> normal Pool Manager pump strategy resumes
 ```
 
+Predictive MPC decisions also apply compressor anti-short-cycle protection:
+
+```yaml
+pac_min_on_s: 900
+pac_min_off_s: 300
+```
+
+The minimum-on clock starts only when the PAC power sensor confirms real
+compressor activity. A later MPC `WAIT` decision is deferred until that time
+has elapsed, and pump circulation is retained meanwhile. Managed restarts wait
+for the minimum-off time. Forced stop, heating disable, Hors Gel and circulation
+fail-safe stops remain immediate.
+
 The PAC remains off outside the configured automatic window unless a temporary Home Assistant heating override is active.
 
 ## Adaptive predictive heating — Thermal Model + MPC

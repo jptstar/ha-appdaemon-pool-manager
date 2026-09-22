@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.3 - PAC anti-short-cycle protection
+
+- Prevent predictive MPC oscillations from short-cycling the PAC compressor.
+- Start the configurable `pac_min_on_s` hold when physical PAC power confirms that the compressor is running, rather than when `Heat` is merely requested.
+- Enforce `pac_min_off_s` before managed restarts while keeping forced stops, flow failures, Hors Gel and explicit heating disable immediately effective.
+- Keep the pump circulation demand active while a predictive stop is deferred.
+- Clamp small negative PAC/PV meter noise to `0 W` in the physical-power debug.
+
 ## 0.10.2 - Physical power-flow debug
 
 - Add optional `entity_grid_import_power` support for installations exposing positive grid import and positive restitution as separate Home Assistant entities.

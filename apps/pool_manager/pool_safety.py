@@ -68,6 +68,8 @@ class SafetyMixin:
         )
         self.pac_auto_timeout_capteurs_s = int(float(self.args.get("pac_auto_timeout_capteurs_s", 900)))
         self.pac_auto_timeout_demarrage_s = int(float(self.args.get("pac_auto_timeout_demarrage_s", 30)))
+        self.pac_min_on_s = max(0, int(float(self.args.get("pac_min_on_s", 900))))
+        self.pac_min_off_s = max(0, int(float(self.args.get("pac_min_off_s", 300))))
         self.pac_post_circulation_s = int(float(self.args.get("pac_post_circulation_s", 60)))
         self.pac_flow_fail_timeout_s = int(float(self.args.get("pac_flow_fail_timeout_s", 15)))
         self.hors_gel_continu_on_c = float(self.args.get("hors_gel_continu_on_c", 1.0))
@@ -81,6 +83,11 @@ class SafetyMixin:
         self.pac_auto_start_pending = False
         self.pac_auto_start_deadline = None
         self.handle_pac_auto_start = None
+        self.pac_last_start_at = None
+        self.pac_compressor_started_at = None
+        self.pac_last_stop_at = None
+        self.pac_deferred_stop_reason = None
+        self.pac_deferred_start_label = None
         self.pac_post_circulation_until = None
         self.handle_pac_post_circulation = None
         self.pac_flow_fault_since = None
@@ -311,8 +318,51 @@ class SafetyMixin:
         self.pac_auto_start_pending = False
         self.pac_auto_start_deadline = None
 
+    def _pac_mark_started(self):
+        self.pac_last_start_at = datetime.datetime.now()
+        self.pac_compressor_started_at = None
+        self.pac_deferred_stop_reason = None
+        self.pac_deferred_start_label = None
+
+    def _pac_mark_stopped(self):
+        self.pac_last_stop_at = datetime.datetime.now()
+        self.pac_compressor_started_at = None
+        self.pac_deferred_stop_reason = None
+
+    def _pac_min_on_remaining_s(self):
+        started_at = getattr(self, "pac_compressor_started_at", None)
+        if started_at is None or self.pac_min_on_s <= 0:
+            return 0
+        elapsed = (datetime.datetime.now() - started_at).total_seconds()
+        return max(0, int(self.pac_min_on_s - elapsed))
+
+    def _pac_min_off_remaining_s(self):
+        stopped_at = getattr(self, "pac_last_stop_at", None)
+        if stopped_at is None or self.pac_min_off_s <= 0:
+            return 0
+        elapsed = (datetime.datetime.now() - stopped_at).total_seconds()
+        return max(0, int(self.pac_min_off_s - elapsed))
+
+    def _pac_start_deferred(self, label):
+        if self._pac_state() != "off":
+            self.pac_deferred_start_label = None
+            return False
+        remaining = self._pac_min_off_remaining_s()
+        if remaining <= 0:
+            self.pac_deferred_start_label = None
+            return False
+        if self.pac_deferred_start_label != label:
+            self.pac_deferred_start_label = label
+            self.log(
+                f"PAC: démarrage différé {remaining}s, anti-cycle ({label})",
+                log="piscine_log",
+            )
+        return True
+
     def _request_pac_start(self):
         if self.pac_auto_start_pending:
+            return
+        if self._pac_start_deferred("automatique saisonnier"):
             return
         self.pac_auto_start_pending = True
         self.pac_auto_start_deadline = datetime.datetime.now() + timedelta(seconds=self.pac_auto_timeout_demarrage_s)
@@ -347,6 +397,7 @@ class SafetyMixin:
         if self._pump_flow_ok():
             try:
                 self.call_service("climate/set_hvac_mode", entity_id=self.entity_pac_climate, hvac_mode="heat")
+                self._pac_mark_started()
                 self._recover("pac_start")
                 self._recover("pac_climate")
                 self._cancel_pac_start()
@@ -363,7 +414,7 @@ class SafetyMixin:
         self.pac_post_circulation_until = None
         self.traitement({})
 
-    def _pac_off(self, reason, post=True):
+    def _pac_off(self, reason, post=True, respect_min_on=False):
         self._cancel_pac_start()
         state = self._pac_state()
         if state is None:
@@ -372,9 +423,25 @@ class SafetyMixin:
             return False
         self._recover("pac_climate")
         if state == "off":
+            self.pac_deferred_stop_reason = None
             return True
+        if respect_min_on:
+            if self.pac_compressor_started_at is None and self._pac_power_active():
+                # After an AppDaemon restart, protect a physically active
+                # compressor conservatively instead of stopping it at once.
+                self.pac_compressor_started_at = datetime.datetime.now()
+            remaining = self._pac_min_on_remaining_s()
+            if remaining > 0:
+                if self.pac_deferred_stop_reason != reason:
+                    self.pac_deferred_stop_reason = reason
+                    self.log(
+                        f"PAC: arrêt différé {remaining}s, anti-cycle ({reason})",
+                        log="piscine_log",
+                    )
+                return False
         try:
             self.call_service("climate/set_hvac_mode", entity_id=self.entity_pac_climate, hvac_mode="off")
+            self._pac_mark_stopped()
             self.log(f"PAC auto: arrêt ({reason})", log="piscine_log")
         except Exception as exc:
             self._fault("pac_stop", f"échec arrêt PAC: {exc}")
@@ -445,7 +512,10 @@ class SafetyMixin:
             self._pac_off("conditions froides")
 
     def _protect_pac_flow(self):
-        if not self.fail_safe_active or not self._pac_power_active():
+        pac_power_active = self._pac_power_active()
+        if pac_power_active and self.pac_compressor_started_at is None:
+            self.pac_compressor_started_at = datetime.datetime.now()
+        if not self.fail_safe_active or not pac_power_active:
             self.pac_flow_fault_since = None
             self._recover("pac_flow")
             return
@@ -464,7 +534,11 @@ class SafetyMixin:
             self._pac_off("circulation pompe non confirmée", post=False)
 
     def _pac_circulation_securite_requise(self):
-        if getattr(self, "pac_auto_start_pending", False) or self._pac_post_active():
+        if (
+            getattr(self, "pac_auto_start_pending", False)
+            or getattr(self, "pac_deferred_stop_reason", None) is not None
+            or self._pac_post_active()
+        ):
             return True
         if getattr(self, "fail_safe_active", False) and self._pac_power_active():
             return True

@@ -194,3 +194,16 @@ def test_power_debug_without_running_pump_keeps_other_physical_flows():
     assert debug.debug == (
         "PAC 1624W | Réseau 1115W | Réinjection 0W | Solaire 2313W"
     )
+
+
+def test_power_debug_clamps_negative_meter_noise_to_zero():
+    debug = FakePowerDebug()
+    debug.get_pac_power_reelle = lambda: -3
+    debug.get_pv_power = lambda: -2
+
+    debug.format_texte_solaire_debug(70)
+
+    assert debug.debug == (
+        "Pompe 516W réel | PAC 0W | Réseau 1115W | "
+        "Réinjection 0W | Solaire 0W"
+    )

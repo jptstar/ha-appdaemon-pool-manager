@@ -165,7 +165,7 @@ class StrategyMixin:
 
             pac_power = self.get_pac_power_reelle()
             if pac_power is not None:
-                debug_parts.append(f"PAC {int(round(pac_power))}W")
+                debug_parts.append(f"PAC {int(round(max(0.0, pac_power)))}W")
             else:
                 debug_parts.append("PAC indisponible")
 
@@ -181,7 +181,7 @@ class StrategyMixin:
                 debug_parts.append("Réinjection indisponible")
 
             if pv_power is not None:
-                debug_parts.append(f"Solaire {int(round(pv_power))}W")
+                debug_parts.append(f"Solaire {int(round(max(0.0, pv_power)))}W")
             elif getattr(self, "entity_pv_power", None):
                 debug_parts.append("Solaire indisponible")
         except Exception:
@@ -209,7 +209,7 @@ class StrategyMixin:
     def set_debug_solaire_off(self, surplus_net, reseau_net, pv_power=None):
         pac_power = self.get_pac_power_reelle()
         debug_parts = [
-            f"PAC {int(round(pac_power))}W"
+            f"PAC {int(round(max(0.0, pac_power)))}W"
             if pac_power is not None
             else "PAC indisponible",
             f"Réseau {int(round(max(0.0, reseau_net)))}W",
@@ -220,7 +220,7 @@ class StrategyMixin:
         else:
             debug_parts.append("Réinjection indisponible")
         if pv_power is not None:
-            debug_parts.append(f"Solaire {int(round(pv_power))}W")
+            debug_parts.append(f"Solaire {int(round(max(0.0, pv_power)))}W")
         elif getattr(self, "entity_pv_power", None):
             debug_parts.append("Solaire indisponible")
         self.set_debug_w(" | ".join(debug_parts))

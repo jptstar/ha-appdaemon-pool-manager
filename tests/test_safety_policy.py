@@ -1,3 +1,4 @@
+import datetime
 import sys
 from pathlib import Path
 
@@ -126,3 +127,90 @@ def test_auto_gate_aborts_pending_start_callback_before_flow_checks():
     assert app.pac_auto_start_pending is False
     assert app.handle_pac_auto_start is None
     assert app.pac_auto_start_deadline is None
+
+
+def make_pac_cycle_app(state="heat"):
+    app = make_safety_app({"climate.pool_pac": state})
+    app.entity_pac_climate = "climate.pool_pac"
+    app.entity_pac_conso = "sensor.pac_power"
+    app.pac_flow_active_w = 200.0
+    app.pac_min_on_s = 900
+    app.pac_min_off_s = 300
+    app.pac_last_start_at = None
+    app.pac_compressor_started_at = None
+    app.pac_last_stop_at = None
+    app.pac_deferred_stop_reason = None
+    app.pac_deferred_start_label = None
+    app.pac_auto_start_pending = False
+    app.pac_auto_start_deadline = None
+    app.handle_pac_auto_start = None
+    app.pac_post_circulation_s = 0
+    app.pac_post_circulation_until = None
+    app.handle_pac_post_circulation = None
+    app.services = []
+    app.call_service = lambda service, **kwargs: app.services.append((service, kwargs))
+    return app
+
+
+def test_predictive_stop_is_deferred_until_minimum_compressor_runtime():
+    app = make_pac_cycle_app("heat")
+    app.pac_compressor_started_at = datetime.datetime.now() - datetime.timedelta(seconds=60)
+
+    stopped = app._pac_off(
+        "chauffage prédictif: attente",
+        respect_min_on=True,
+    )
+
+    assert stopped is False
+    assert app.services == []
+    assert app.pac_deferred_stop_reason == "chauffage prédictif: attente"
+    assert app._pac_circulation_securite_requise() is True
+
+
+def test_predictive_stop_runs_after_minimum_compressor_runtime():
+    app = make_pac_cycle_app("heat")
+    app.pac_compressor_started_at = datetime.datetime.now() - datetime.timedelta(seconds=901)
+
+    stopped = app._pac_off(
+        "chauffage prédictif: attente",
+        respect_min_on=True,
+    )
+
+    assert stopped is True
+    assert app.services == [
+        (
+            "climate/set_hvac_mode",
+            {"entity_id": "climate.pool_pac", "hvac_mode": "off"},
+        )
+    ]
+    assert app.pac_last_stop_at is not None
+
+
+def test_safety_stop_bypasses_minimum_compressor_runtime():
+    app = make_pac_cycle_app("heat")
+    app.pac_compressor_started_at = datetime.datetime.now()
+
+    stopped = app._pac_off("circulation pompe non confirmée", post=False)
+
+    assert stopped is True
+    assert len(app.services) == 1
+
+
+def test_restart_is_deferred_during_minimum_compressor_off_time():
+    app = make_pac_cycle_app("off")
+    app.pac_last_stop_at = datetime.datetime.now() - datetime.timedelta(seconds=30)
+
+    assert app._pac_start_deferred("fin de saison") is True
+    assert app.services == []
+
+
+def test_physical_pac_power_starts_minimum_runtime_clock():
+    app = make_pac_cycle_app("heat")
+    app.get_state = lambda entity_id, **kwargs: (
+        "800" if entity_id == "sensor.pac_power" else "heat"
+    )
+    app._pump_flow_ok = lambda: True
+
+    app._protect_pac_flow()
+
+    assert app.pac_compressor_started_at is not None

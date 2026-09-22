@@ -109,6 +109,10 @@ pool_manager:
   heure_fin_pac_soleil: "17:30:00"
   pac_import_max_jour_w: 300
   pac_tempo_anti_coupure_jour: 900
+  # Compressor anti-short-cycle protection. The minimum run time starts when
+  # physical PAC power confirms the compressor; safety/explicit stops stay immediate.
+  pac_min_on_s: 900
+  pac_min_off_s: 300
   pac_maintien_jour_force: true
 
   pac_prioritaire_absolue: true

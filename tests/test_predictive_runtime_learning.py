@@ -363,7 +363,7 @@ def test_heating_estimate_starts_at_actual_pac_session_not_old_certification(tmp
     assert 25.35 <= estimated <= 25.45
 
 
-def test_wait_stops_active_pac_immediately_and_keeps_measurement_pump_only(tmp_path):
+def test_wait_requests_protected_pac_stop_and_keeps_measurement_pump_only(tmp_path):
     app = _make_runtime(tmp_path)
     calls = []
 
@@ -386,9 +386,10 @@ def test_wait_stops_active_pac_immediately_and_keeps_measurement_pump_only(tmp_p
         "trajectory_target_c": 22.0,
     }
     app._cancel_chauffage_start = lambda: calls.append(("cancel_start",))
-    app._pac_power_active = lambda: True
-    app._pac_off = lambda reason, post=True: calls.append(
-        ("pac_off", reason, post)
+    app._pac_state = lambda: "heat"
+    app._pac_power_active = lambda: False
+    app._pac_off = lambda reason, post=True, respect_min_on=False: calls.append(
+        ("pac_off", reason, post, respect_min_on)
     ) or True
     app._maybe_measure_during_normal_filtration = lambda plan: False
     app._log_predictive_plan = lambda *args, **kwargs: None
@@ -397,6 +398,7 @@ def test_wait_stops_active_pac_immediately_and_keeps_measurement_pump_only(tmp_p
     app._manage_predictive_heating("end_season")
 
     assert any(call[0] == "pac_off" for call in calls)
+    assert next(call for call in calls if call[0] == "pac_off")[3] is True
     assert app.chauffage_predictif_heat_requested is False
     assert app.chauffage_predictif_heat_target_c is None
     assert app.chauffage_predictif_measurement_active is True

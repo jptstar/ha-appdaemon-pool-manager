@@ -224,6 +224,10 @@ pool_manager:
   pac_auto_arret_7j_c: 17
   pac_auto_timeout_capteurs_s: 900
   pac_auto_timeout_demarrage_s: 30
+  # Compressor anti-short-cycle protection. The minimum run time starts when
+  # physical PAC power confirms the compressor; safety/explicit stops stay immediate.
+  pac_min_on_s: 900
+  pac_min_off_s: 300
   pac_post_circulation_s: 60
   pac_flow_fail_timeout_s: 15
   pac_flow_active_w: 200

@@ -275,6 +275,26 @@ class PredictiveHeatingSupport:
                 float(self.args.get("chauffage_predictif_apprentissage_alpha", 0.25)),
             ),
         )
+        self.chauffage_predictif_apprentissage_mesure_hors_pac = self._bool_value(
+            self.args.get(
+                "chauffage_predictif_apprentissage_mesure_hors_pac",
+                "true",
+            ),
+            default=True,
+        )
+
+        # Optional installation diagnostics. They never replace temperature_eau;
+        # they only make the physical PAC circuit visible on the predictive
+        # status entity and help validate learned samples in the field.
+        self.entity_pac_inlet_temperature = self.args.get(
+            "entity_pac_inlet_temperature"
+        )
+        self.entity_pac_outlet_temperature = self.args.get(
+            "entity_pac_outlet_temperature"
+        )
+        self.entity_pac_ambient_temperature = self.args.get(
+            "entity_pac_ambient_temperature"
+        )
 
         # Legacy measurement settings are still parsed for configuration
         # compatibility. Since the passive-sampling change, certification uses
@@ -442,6 +462,8 @@ class PredictiveHeatingSupport:
 
         self._heating_learning_session = None
         self._passive_learning_session = None
+        self.chauffage_predictif_last_heating_learning_at = None
+        self.chauffage_predictif_last_learning_event = None
         self._load_predictive_learning()
 
     # ----------------------------- forecast cache -----------------------------
@@ -577,6 +599,9 @@ class PredictiveHeatingSupport:
             self.chauffage_predictif_certified_at = self._parse_datetime(
                 certified.get("at")
             )
+            self.chauffage_predictif_last_heating_learning_at = self._parse_datetime(
+                payload.get("last_heating_learning_at")
+            )
 
             passive = payload.get("pending_passive") or {}
             started_at = self._parse_datetime(passive.get("started_at"))
@@ -615,11 +640,14 @@ class PredictiveHeatingSupport:
             }
 
         payload = {
-            "version": 2,
+            "version": 3,
             "updated_at": datetime.datetime.now().isoformat(),
             "heating": self.chauffage_predictif_rate_model,
             "night_loss": self.chauffage_predictif_loss_model,
             "last_certified": certified,
+            "last_heating_learning_at": self._iso_datetime(
+                self.chauffage_predictif_last_heating_learning_at
+            ),
             "pending_passive": self._serialize_passive_session(),
         }
 
@@ -1136,6 +1164,25 @@ class PredictiveHeatingSupport:
             session["ambient_sum"] += float(ambient)
             session["ambient_count"] += 1
 
+    def _record_learning_event(self, kind, status, detail, now=None):
+        """Expose every material learning result through the HA journal/status."""
+        now = now or datetime.datetime.now()
+        event = {
+            "timestamp": now.isoformat(timespec="seconds"),
+            "kind": str(kind),
+            "status": str(status),
+            "detail": str(detail),
+        }
+        self.chauffage_predictif_last_learning_event = event
+        try:
+            self.log(
+                f"Apprentissage {kind} {status}: {detail}",
+                log="piscine_log",
+            )
+        except Exception:
+            pass
+        return event
+
     def _finalize_passive_learning(self, now, water):
         session = self._passive_learning_session
         if not session:
@@ -1172,16 +1219,37 @@ class PredictiveHeatingSupport:
             )
             if learned != before:
                 self.chauffage_predictif_loss_model = learned
-                try:
-                    self.log(
-                        f"Apprentissage pertes nuit: {loss:.2f} °C sur "
-                        f"{elapsed_s / 3600.0:.1f} h "
-                        f"(air {avg_ambient if avg_ambient is not None else '?'} °C, "
-                        f"volet {session.get('cover')})",
-                        log="piscine_log",
-                    )
-                except Exception:
-                    pass
+                self._record_learning_event(
+                    "pertes nuit",
+                    "accepté",
+                    f"{loss:.2f} °C sur {elapsed_s / 3600.0:.1f} h "
+                    f"(air {avg_ambient if avg_ambient is not None else '?'} °C, "
+                    f"volet {session.get('cover')})",
+                    now=now,
+                )
+            else:
+                self._record_learning_event(
+                    "pertes nuit",
+                    "rejeté",
+                    f"taux hors limites ({rate:.3f} °C/h)",
+                    now=now,
+                )
+        elif self._crosses_midnight(started, now) or elapsed_s >= 4 * 3600:
+            reasons = []
+            if elapsed_s < 4 * 3600:
+                reasons.append("durée inférieure à 4 h")
+            elif elapsed_s > 20 * 3600:
+                reasons.append("durée supérieure à 20 h")
+            if not self._crosses_midnight(started, now):
+                reasons.append("intervalle sans passage de nuit")
+            if session.get("contaminated", False):
+                reasons.append("PAC active ou changement de volet")
+            self._record_learning_event(
+                "pertes nuit",
+                "rejeté",
+                ", ".join(reasons) or "intervalle invalide",
+                now=now,
+            )
 
         self._passive_learning_session = None
 
@@ -1200,7 +1268,110 @@ class PredictiveHeatingSupport:
         preset = self._predictive_pac_preset()
         session = self._heating_learning_session
 
+        # A post-heating certification deliberately runs with the compressor
+        # off. Keep the learning session alive until that mixed-water sample is
+        # available; otherwise the stop needed to make the sample trustworthy
+        # would erase the very interval being measured.
+        if session and session.get("awaiting_measurement"):
+            requested_at = session.get("measurement_requested_at")
+            failed_at = getattr(
+                self,
+                "chauffage_predictif_measurement_failed_at",
+                None,
+            )
+            if (
+                isinstance(failed_at, datetime.datetime)
+                and isinstance(requested_at, datetime.datetime)
+                and failed_at >= requested_at
+            ):
+                self._record_learning_event(
+                    "PAC",
+                    "rejeté",
+                    "certification après chauffe impossible",
+                    now=now,
+                )
+                self._heating_learning_session = None
+                return
+
+            certified_at = self.chauffage_predictif_certified_at
+            certified_water = self.chauffage_predictif_certified_water_c
+            if (
+                certified_at is None
+                or certified_water is None
+                or certified_at <= session["start_certified_at"]
+                or (
+                    isinstance(requested_at, datetime.datetime)
+                    and certified_at < requested_at
+                )
+            ):
+                return
+
+            elapsed_s = float(session.get("heating_elapsed_s") or 0.0)
+            if elapsed_s < self.chauffage_predictif_apprentissage_min_s:
+                self._record_learning_event(
+                    "PAC",
+                    "rejeté",
+                    f"chauffe trop courte ({elapsed_s / 60.0:.1f} min)",
+                    now=now,
+                )
+                self._heating_learning_session = None
+                return
+
+            rate = (
+                float(certified_water) - float(session["water"])
+            ) / (elapsed_s / 3600.0)
+            avg_ambient = (
+                session["ambient_sum"] / session["ambient_count"]
+                if session.get("ambient_count")
+                else ambient
+            )
+            avg_power = (
+                session["power_sum"] / session["power_count"]
+                if session.get("power_count")
+                else None
+            )
+            before = self.chauffage_predictif_rate_model
+            learned = update_heating_rate_model(
+                before,
+                session.get("preset") or preset,
+                avg_ambient,
+                rate,
+                alpha=self.chauffage_predictif_apprentissage_alpha,
+                sample_power_w=avg_power,
+            )
+            if learned != before:
+                self.chauffage_predictif_rate_model = learned
+                self._save_predictive_learning()
+                detail = (
+                    f"{rate:.3f} °C/h sur {elapsed_s / 60.0:.1f} min "
+                    f"à {avg_ambient if avg_ambient is not None else '?'} °C"
+                )
+                if avg_power is not None:
+                    detail += f", {avg_power:.0f} W"
+                self._record_learning_event(
+                    "PAC",
+                    "accepté",
+                    detail,
+                    now=now,
+                )
+            else:
+                self._record_learning_event(
+                    "PAC",
+                    "rejeté",
+                    f"gain hors limites ({rate:.3f} °C/h)",
+                    now=now,
+                )
+            self._heating_learning_session = None
+            return
+
         if not active:
+            if session is not None:
+                self._record_learning_event(
+                    "PAC",
+                    "rejeté",
+                    "compresseur arrêté avant la mesure de fin",
+                    now=now,
+                )
             self._heating_learning_session = None
             return
 
@@ -1241,78 +1412,60 @@ class PredictiveHeatingSupport:
             session["power_sum"] += float(power)
             session["power_count"] += 1
 
-        # Learn only from a NEW certified water measurement. Raw pipe readings
-        # never enter the model.
-        if certified_at <= session["start_certified_at"]:
-            return
-
-        elapsed_s = (certified_at - session["started_at"]).total_seconds()
-        if elapsed_s < self.chauffage_predictif_apprentissage_min_s:
-            return
-
-        rate = (
-            float(certified_water) - float(session["water"])
-        ) / (elapsed_s / 3600.0)
-        avg_ambient = (
-            session["ambient_sum"] / session["ambient_count"]
-            if session["ambient_count"]
-            else ambient
-        )
-        avg_power = (
-            session["power_sum"] / session["power_count"]
-            if session["power_count"]
-            else None
-        )
-
-        before = self.chauffage_predictif_rate_model
-        learned = update_heating_rate_model(
-            before,
-            preset,
-            avg_ambient,
-            rate,
-            alpha=self.chauffage_predictif_apprentissage_alpha,
-            sample_power_w=avg_power,
-        )
-        if learned != before:
-            self.chauffage_predictif_rate_model = learned
-            self._save_predictive_learning()
-            try:
-                self.log(
-                    f"Apprentissage PAC {preset}: {rate:.3f} °C/h "
-                    f"à {avg_ambient if avg_ambient is not None else '?'} °C"
-                    + (
-                        f", {avg_power:.0f} W"
-                        if avg_power is not None
-                        else ""
-                    ),
-                    log="piscine_log",
-                )
-            except Exception:
-                pass
-
-        self._heating_learning_session = {
-            "started_at": now,
-            "start_certified_at": certified_at,
-            "water": float(certified_water),
-            "preset": preset,
-            "ambient_sum": float(ambient or 0.0),
-            "ambient_count": 1 if ambient is not None else 0,
-            "power_sum": 0.0,
-            "power_count": 0,
-        }
-
     def _maybe_request_learning_measurement(self, now):
         if not self._pac_power_active():
             return
         if self.chauffage_predictif_measurement_active:
             return
+        last_learning_at = self.chauffage_predictif_last_heating_learning_at
+        if (
+            isinstance(last_learning_at, datetime.datetime)
+            and last_learning_at.date() == now.date()
+        ):
+            return
+        session = self._heating_learning_session
+        if not session or session.get("awaiting_measurement"):
+            return
+        started_at = session.get("started_at")
+        if not isinstance(started_at, datetime.datetime):
+            return
+        elapsed_s = (now - started_at).total_seconds()
+        if elapsed_s < self.chauffage_predictif_apprentissage_min_s:
+            return
 
-        age = self._certified_age_s(now)
-        if age is None or age >= self.chauffage_predictif_mesure_intervalle_chauffe_s:
-            self._request_predictive_measurement(
-                "heating_learning",
-                start_pump=False,
+        if self.chauffage_predictif_apprentissage_mesure_hors_pac:
+            stopped = self._pac_off(
+                "apprentissage: certification après chauffe",
+                post=True,
+                respect_min_on=True,
             )
+            if not stopped:
+                return
+
+        if not self._request_predictive_measurement(
+            "heating_learning",
+            start_pump=False,
+        ):
+            self._record_learning_event(
+                "PAC",
+                "rejeté",
+                "mesure de fin indisponible",
+                now=now,
+            )
+            self._heating_learning_session = None
+            return
+
+        session["awaiting_measurement"] = True
+        session["measurement_requested_at"] = now
+        session["heating_elapsed_s"] = elapsed_s
+        self.chauffage_predictif_last_heating_learning_at = now
+        self._save_predictive_learning()
+        self._record_learning_event(
+            "PAC",
+            "mesure",
+            f"certification après {elapsed_s / 60.0:.1f} min de chauffe",
+            now=now,
+        )
 
     def _update_predictive_learning(self):
         if not self.chauffage_predictif_apprentissage:
@@ -1510,6 +1663,17 @@ class PredictiveHeatingSupport:
     def _iso_datetime(value):
         return value.isoformat() if isinstance(value, datetime.datetime) else None
 
+    @staticmethod
+    def _learning_sample_count(model):
+        total = 0
+        for bins in (model or {}).values():
+            for entry in (bins or {}).values():
+                try:
+                    total += max(0, int((entry or {}).get("count") or 0))
+                except (TypeError, ValueError):
+                    pass
+        return total
+
 
     def _forced_heating_timer_progress(self, now=None):
         """Return forced-heating deadline + live remaining seconds.
@@ -1640,6 +1804,22 @@ class PredictiveHeatingSupport:
         forced_timer_ends_at, forced_timer_remaining_s = (
             self._forced_heating_timer_progress(status_now)
         )
+        water_source_entity = self.args.get("temperature_eau")
+        water_source = self._raw_float(water_source_entity)
+        pac_inlet = self._raw_float(
+            getattr(self, "entity_pac_inlet_temperature", None)
+        )
+        pac_outlet = self._raw_float(
+            getattr(self, "entity_pac_outlet_temperature", None)
+        )
+        pac_ambient = self._raw_float(
+            getattr(self, "entity_pac_ambient_temperature", None)
+        )
+        pac_delta = (
+            float(pac_outlet) - float(pac_inlet)
+            if pac_inlet is not None and pac_outlet is not None
+            else None
+        )
         rows = dashboard_forecast(forecast, plan or {}, status_now)
         attributes = {
             "friendly_name": "Piscine chauffage prédictif",
@@ -1657,6 +1837,24 @@ class PredictiveHeatingSupport:
             ),
             "certified_water_at": self._iso_datetime(
                 self.chauffage_predictif_certified_at
+            ),
+            "water_temperature_source_entity": water_source_entity,
+            "water_temperature_source": (
+                round(float(water_source), 2)
+                if water_source is not None
+                else None
+            ),
+            "pac_inlet_temperature": (
+                round(float(pac_inlet), 2) if pac_inlet is not None else None
+            ),
+            "pac_outlet_temperature": (
+                round(float(pac_outlet), 2) if pac_outlet is not None else None
+            ),
+            "pac_ambient_temperature": (
+                round(float(pac_ambient), 2) if pac_ambient is not None else None
+            ),
+            "pac_water_delta_c": (
+                round(float(pac_delta), 2) if pac_delta is not None else None
             ),
             "measurement_active": bool(
                 self.chauffage_predictif_measurement_active
@@ -1757,6 +1955,16 @@ class PredictiveHeatingSupport:
             "forecast": rows,
             "learned_heating_rates": self.chauffage_predictif_rate_model,
             "learned_night_losses": self.chauffage_predictif_loss_model,
+            "heating_learning_samples": self._learning_sample_count(
+                self.chauffage_predictif_rate_model
+            ),
+            "night_loss_learning_samples": self._learning_sample_count(
+                self.chauffage_predictif_loss_model
+            ),
+            "last_heating_learning_at": self._iso_datetime(
+                self.chauffage_predictif_last_heating_learning_at
+            ),
+            "last_learning_event": self.chauffage_predictif_last_learning_event,
             "expected_night_cover": self._predictive_expected_night_cover_state(),
             "forecast_updated_at": self._iso_datetime(
                 self.chauffage_predictif_forecast_at
@@ -1869,8 +2077,9 @@ class PredictiveHeatingSupport:
         now = datetime.datetime.now()
         if self._certified_fresh(now, same_day=True):
             return False
-        if self._measurement_retry_blocked(now):
-            return False
+        # A failed morning calibration must delay heating until its retry,
+        # otherwise the first PAC cycle contaminates the overnight reference
+        # and passive-loss learning can never obtain a clean morning sample.
         return True
 
     def _maybe_measure_during_normal_filtration(self, plan):
@@ -1980,9 +2189,16 @@ class PredictiveHeatingSupport:
                 and self.chauffage_predictif_measurement_purpose
                 in {"heating_learning", "target_check"}
             ):
-                self.chauffage_predictif_measurement_purpose = (
-                    "temperature_stabilization"
-                )
+                session = getattr(self, "_heating_learning_session", None)
+                if not (
+                    self.chauffage_predictif_measurement_purpose
+                    == "heating_learning"
+                    and session
+                    and session.get("awaiting_measurement")
+                ):
+                    self.chauffage_predictif_measurement_purpose = (
+                        "temperature_stabilization"
+                    )
 
             # If normal filtration is already running and a selected bathing
             # window is close, use pump-only circulation to refresh the pool
@@ -2004,7 +2220,45 @@ class PredictiveHeatingSupport:
         # measurement is never allowed to create an independent pump cycle.
         self._maybe_measure_during_normal_filtration(plan)
 
+        if (
+            self.chauffage_predictif_measurement_active
+            and self.chauffage_predictif_measurement_purpose
+            == "heating_learning"
+        ):
+            self.chauffage_predictif_heat_requested = True
+            self.chauffage_predictif_heat_target_c = (
+                plan.get("heat_target_c") or target
+            )
+            self._cancel_chauffage_start()
+            self._publish_predictive_status(
+                plan=plan,
+                forecast=forecast,
+                kind=kind,
+                water=water,
+                target=target,
+                override="🌀 Mesure du gain réel après chauffe",
+            )
+            return
+
         if self._measurement_required_before_action(plan):
+            if self._measurement_retry_blocked():
+                self.chauffage_predictif_heat_requested = False
+                self.chauffage_predictif_heat_target_c = None
+                self._cancel_chauffage_start()
+                self._pac_off(
+                    "chauffage prédictif: attente nouvelle mesure température",
+                    post=False,
+                )
+                self._publish_predictive_status(
+                    plan=plan,
+                    forecast=forecast,
+                    kind=kind,
+                    water=water,
+                    target=target,
+                    override="⏳ Mesure du matin à renouveler avant chauffe",
+                )
+                return
+
             self.chauffage_predictif_heat_requested = True
             self.chauffage_predictif_heat_target_c = (
                 plan.get("heat_target_c") or target

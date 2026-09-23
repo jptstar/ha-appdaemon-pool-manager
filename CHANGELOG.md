@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.4 - Observable thermal learning and physical PAC shutdown
+
+- Keep filtration circulating after a PAC stop until compressor power has stayed below its active threshold, including when Home Assistant already reports the climate entity as `off`.
+- Require a successful morning certified water measurement before predictive heating starts; failed calibration now delays heating until the bounded retry instead of contaminating overnight-loss learning.
+- Learn real PAC gain from a fresh pre-heating certification and a pump-only mixed-water certification after at least one complete heating interval, limited to one learning interruption per day.
+- Journal accepted and rejected PAC-gain/night-loss samples and expose their counters plus the latest learning event on the existing predictive status entity.
+- Expose the configured pool probe and optional PAC inlet, outlet and ambient temperatures, including the live PAC water delta, without creating or renaming Home Assistant entities.
+- Preserve the existing physical power debug, solar pump arbitration, entity IDs and selector values.
+
 ## 0.10.3 - PAC anti-short-cycle protection
 
 - Prevent predictive MPC oscillations from short-cycling the PAC compressor.

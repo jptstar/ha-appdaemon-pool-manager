@@ -124,7 +124,8 @@ A normal automatic stop is sequenced in the opposite safety order:
 
 ```text
 climate -> Off
-        -> post-circulation (60 s by default)
+        -> post-circulation (60 s minimum by default)
+        -> PAC power below threshold for 30 s
         -> normal Pool Manager pump strategy resumes
 ```
 
@@ -133,6 +134,9 @@ Predictive MPC decisions also apply compressor anti-short-cycle protection:
 ```yaml
 pac_min_on_s: 900
 pac_min_off_s: 300
+pac_post_circulation_s: 60
+pac_post_circulation_stable_s: 30
+pac_post_circulation_max_s: 180
 ```
 
 The minimum-on clock starts only when the PAC power sensor confirms real
@@ -206,7 +210,7 @@ Since v0.9.1, reaching `tempo_eau` is not enough by itself. The physical pipe pr
 
 Once a certified measurement has started, normal solar/grid/quota optimization is temporarily suspended for that short hydraulic cycle: ordinary high house consumption or weak surplus cannot stop the pump and waste the calibration already achieved. Forced stop, safety rules and Hors Gel remain higher priority. The PAC stays off during a decision calibration. When certification finishes, speed authority immediately returns to the normal strategy. `mem_temp` remains an operational fallback while the pump is stopped and is never accepted as a learning sample.
 
-Calibration remains bounded. By default the pump has 300 s to confirm the reference speed, and a stuck circulation/stability phase is released instead of holding control indefinitely. After failure, Pool Manager continues from its best estimated pool temperature and waits 900 s before retrying certification. The optional settings are `chauffage_predictif_mesure_timeout_grace_s` and `chauffage_predictif_mesure_retry_s`.
+Calibration remains bounded. By default the pump has 300 s to confirm the reference speed, and a stuck circulation/stability phase is released instead of holding control indefinitely. After failure, Pool Manager waits 900 s before retrying certification. When heating is required, the PAC remains off until that first certified measurement of the day succeeds, so the morning sample and overnight-loss interval cannot be contaminated. The optional settings are `chauffage_predictif_mesure_timeout_grace_s` and `chauffage_predictif_mesure_retry_s`.
 
 If predictive heating genuinely needs to start while the pump is off, circulation may be started because heating itself requires flow. The controller then waits for the normal `tempo_eau` stabilization before using the physical probe for the final heating decision.
 
@@ -218,6 +222,14 @@ The persistent thermal model learns from real certified measurements:
 - average PAC electrical power for the same learned samples, including derived kWh/°C when available;
 - passive overnight loss in °C/h from two certified pool measurements, water/air temperature difference and real cover state;
 - only clean samples are accepted: PAC activity contaminates a passive-loss sample, and a cover-state change rejects it.
+
+For PAC-gain learning, Pool Manager starts from a fresh pump-only certified
+temperature. After `chauffage_predictif_apprentissage_min_s` of confirmed
+compressor operation, it stops the PAC, keeps circulation active and certifies
+the mixed water before accepting the gain. This prevents locally heated pipe
+water from being mistaken for the temperature rise of the whole pool. Set
+`chauffage_predictif_apprentissage_mesure_hors_pac: false` only when the
+configured probe is known to measure representative bulk water during heating.
 
 For night-loss learning, the start point is the **last certified pool temperature before the long stop**, and the end point is the **first new certified pool temperature after circulation has mixed the pool again**. Stale pipe values and `mem_temp` do not enter that calculation.
 
@@ -322,6 +334,12 @@ If `entity_chauffage_predictif_status` is configured, useful attributes now incl
 - `water_temperature_estimated`
 - `certified_water_temperature`
 - `certified_water_at`
+- `water_temperature_source_entity`
+- `water_temperature_source`
+- `pac_inlet_temperature`
+- `pac_outlet_temperature`
+- `pac_ambient_temperature`
+- `pac_water_delta_c`
 - `measurement_active`
 - `measurement_reference_speed_pct` (70% by default; temporary calibration minimum)
 - `measurement_requested_at`
@@ -348,6 +366,9 @@ If `entity_chauffage_predictif_status` is configured, useful attributes now incl
 - `mpc_plan`
 - `learned_heating_rates`
 - `learned_night_losses`
+- `heating_learning_samples`
+- `night_loss_learning_samples`
+- `last_learning_event`
 - `forecast`
 
 ## Aquagem / iSaver local-control handover

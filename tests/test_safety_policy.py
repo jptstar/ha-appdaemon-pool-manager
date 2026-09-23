@@ -214,3 +214,57 @@ def test_physical_pac_power_starts_minimum_runtime_clock():
     app._protect_pac_flow()
 
     assert app.pac_compressor_started_at is not None
+
+
+def test_post_circulation_waits_for_pac_power_to_stay_low():
+    app = make_pac_cycle_app("off")
+    app.pac_post_circulation_stable_s = 30
+    app.pac_post_circulation_until = (
+        datetime.datetime.now() + datetime.timedelta(minutes=2)
+    )
+    app.pac_post_circulation_low_since = None
+    app.handle_pac_post_circulation = "timer"
+    app.flow_requests = 0
+    app._ensure_pac_flow = lambda: setattr(
+        app,
+        "flow_requests",
+        app.flow_requests + 1,
+    )
+    scheduled = []
+    app.run_in = lambda callback, delay: scheduled.append((callback, delay)) or "next"
+    app.traitement = lambda kwargs: scheduled.append(("traitement", kwargs))
+    app._pac_power_active = lambda: True
+
+    app._end_pac_post({})
+
+    assert app.flow_requests == 1
+    assert app.handle_pac_post_circulation == "next"
+    assert scheduled[-1][1] <= 5
+
+    app._pac_power_active = lambda: False
+    app.pac_post_circulation_low_since = (
+        datetime.datetime.now() - datetime.timedelta(seconds=31)
+    )
+    app._end_pac_post({})
+
+    assert app.pac_post_circulation_until is None
+    assert app.pac_post_circulation_low_since is None
+    assert scheduled[-1][0] == "traitement"
+
+
+def test_hvac_off_with_residual_pac_power_starts_post_circulation():
+    app = make_pac_cycle_app("off")
+    app.pac_post_circulation_s = 60
+    app.pac_post_circulation_max_s = 180
+    app.pac_post_circulation_low_since = None
+    app.handle_pac_post_circulation = None
+    app.calls = []
+    app._pac_power_active = lambda: True
+    app._ensure_pac_flow = lambda: app.calls.append(("flow",))
+    app.run_in = lambda callback, delay: app.calls.append(("timer", delay)) or "post"
+
+    assert app._pac_off("residual test", post=True) is True
+
+    assert app.handle_pac_post_circulation == "post"
+    assert app.pac_post_circulation_until is not None
+    assert ("flow",) in app.calls

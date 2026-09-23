@@ -80,6 +80,11 @@ pool_manager:
   entity_pac_climate: climate.pool_heat_pump
   entity_pac_conso: sensor.pool_heat_pump_power
   entity_pompe_conso: sensor.pool_pump_power
+  # Optional PAC circuit diagnostics published as attributes of the predictive
+  # status sensor; these do not replace temperature_eau.
+  entity_pac_inlet_temperature: sensor.pool_heat_pump_inlet_temperature
+  entity_pac_outlet_temperature: sensor.pool_heat_pump_outlet_temperature
+  entity_pac_ambient_temperature: sensor.pool_heat_pump_ambient_temperature
 
   # v0.6.0: one selector controls the heating profile. Recommended options:
   # Désactivé / Automatique / Début de saison • Smart / Fin de saison • Smart /
@@ -137,6 +142,7 @@ pool_manager:
   chauffage_predictif_apprentissage: true
   chauffage_predictif_apprentissage_min_s: 1800
   chauffage_predictif_apprentissage_alpha: 0.25
+  chauffage_predictif_apprentissage_mesure_hors_pac: true
 
   # Full-horizon MPC search. The per-day plan exposes swim/preheat decisions,
   # target dates, predicted water temperatures and recoverability floors.
@@ -162,8 +168,9 @@ pool_manager:
   chauffage_predictif_mesure_timeout_grace_s: 300
   chauffage_predictif_mesure_retry_s: 900
 
-  # During a long PAC run, request another certified sample every 2 hours so
-  # Smart/Turbo gain and electrical power continue to learn automatically.
+  # Compatibility interval retained for existing installations. v0.10.4 closes
+  # a complete learning interval as soon as apprentissage_min_s is reached,
+  # stops the PAC and certifies mixed water before accepting the sample.
   chauffage_predictif_mesure_intervalle_chauffe_s: 7200
 
   # If normal filtration is already running, certify a morning decision when a
@@ -229,6 +236,8 @@ pool_manager:
   pac_min_on_s: 900
   pac_min_off_s: 300
   pac_post_circulation_s: 60
+  pac_post_circulation_stable_s: 30
+  pac_post_circulation_max_s: 180
   pac_flow_fail_timeout_s: 15
   pac_flow_active_w: 200
 

@@ -56,6 +56,10 @@ pool_manager:
   entity_pac_climate: climate.pool_heat_pump
   entity_pac_conso: sensor.pool_heat_pump_power
   entity_pompe_conso: sensor.pool_pump_power
+  # Optional PAC diagnostics exposed on the predictive status entity.
+  entity_pac_inlet_temperature: sensor.pool_heat_pump_inlet_temperature
+  entity_pac_outlet_temperature: sensor.pool_heat_pump_outlet_temperature
+  entity_pac_ambient_temperature: sensor.pool_heat_pump_ambient_temperature
 
   # Optional Home Assistant policy signal. HA owns the override timer/PAC mode;
   # Pool Manager treats this as a circulation demand.
@@ -87,6 +91,9 @@ pool_manager:
   chauffage_predictif_gain_chauffe_c_par_h: 0.30
   chauffage_predictif_perte_nuit_delta10_c_par_h: 0.05
   chauffage_predictif_apprentissage: true
+  # Stop the compressor after a complete learning interval, then certify mixed
+  # water with pump-only circulation so local hot pipe water is never learned.
+  chauffage_predictif_apprentissage_mesure_hors_pac: true
 
   # Certified water temperature: 70% is a temporary minimum. After tempo_eau,
   # the pipe probe must stay stable for 120 s within 0.15 °C. Normal energy
@@ -113,6 +120,10 @@ pool_manager:
   # physical PAC power confirms the compressor; safety/explicit stops stay immediate.
   pac_min_on_s: 900
   pac_min_off_s: 300
+  # Keep circulation until PAC power has stayed low for 30 s (180 s maximum).
+  pac_post_circulation_s: 60
+  pac_post_circulation_stable_s: 30
+  pac_post_circulation_max_s: 180
   pac_maintien_jour_force: true
 
   pac_prioritaire_absolue: true

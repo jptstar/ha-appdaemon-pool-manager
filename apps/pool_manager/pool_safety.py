@@ -71,6 +71,14 @@ class SafetyMixin:
         self.pac_min_on_s = max(0, int(float(self.args.get("pac_min_on_s", 900))))
         self.pac_min_off_s = max(0, int(float(self.args.get("pac_min_off_s", 300))))
         self.pac_post_circulation_s = int(float(self.args.get("pac_post_circulation_s", 60)))
+        self.pac_post_circulation_stable_s = max(
+            0,
+            int(float(self.args.get("pac_post_circulation_stable_s", 30))),
+        )
+        self.pac_post_circulation_max_s = max(
+            self.pac_post_circulation_s,
+            int(float(self.args.get("pac_post_circulation_max_s", 180))),
+        )
         self.pac_flow_fail_timeout_s = int(float(self.args.get("pac_flow_fail_timeout_s", 15)))
         self.hors_gel_continu_on_c = float(self.args.get("hors_gel_continu_on_c", 1.0))
         self.hors_gel_continu_off_c = float(self.args.get("hors_gel_continu_off_c", 3.0))
@@ -89,6 +97,7 @@ class SafetyMixin:
         self.pac_deferred_stop_reason = None
         self.pac_deferred_start_label = None
         self.pac_post_circulation_until = None
+        self.pac_post_circulation_low_since = None
         self.handle_pac_post_circulation = None
         self.pac_flow_fault_since = None
         self._safety_faults = set()
@@ -411,8 +420,66 @@ class SafetyMixin:
 
     def _end_pac_post(self, kwargs):
         self.handle_pac_post_circulation = None
+        now = datetime.datetime.now()
+        until = getattr(self, "pac_post_circulation_until", None)
+        power_active = self._pac_power_active()
+
+        if power_active:
+            self.pac_post_circulation_low_since = None
+            if until is not None and now < until:
+                self._ensure_pac_flow()
+                self.handle_pac_post_circulation = self.run_in(
+                    self._end_pac_post,
+                    min(5, max(1, int((until - now).total_seconds()))),
+                )
+                return
+        else:
+            low_since = getattr(self, "pac_post_circulation_low_since", None)
+            if low_since is None:
+                self.pac_post_circulation_low_since = now
+                low_since = now
+            stable_s = max(
+                0,
+                int(getattr(self, "pac_post_circulation_stable_s", 0)),
+            )
+            low_elapsed = (now - low_since).total_seconds()
+            if low_elapsed < stable_s and (until is None or now < until):
+                self._ensure_pac_flow()
+                self.handle_pac_post_circulation = self.run_in(
+                    self._end_pac_post,
+                    min(5, max(1, int(stable_s - low_elapsed))),
+                )
+                return
+
         self.pac_post_circulation_until = None
+        self.pac_post_circulation_low_since = None
         self.traitement({})
+
+    def _start_pac_post_circulation(self):
+        if self.pac_post_circulation_s <= 0:
+            return
+        now = datetime.datetime.now()
+        self.pac_post_circulation_until = now + timedelta(
+            seconds=max(
+                self.pac_post_circulation_s,
+                getattr(
+                    self,
+                    "pac_post_circulation_max_s",
+                    self.pac_post_circulation_s,
+                ),
+            )
+        )
+        self.pac_post_circulation_low_since = None
+        if self.handle_pac_post_circulation is not None:
+            try:
+                self.cancel_timer(self.handle_pac_post_circulation)
+            except Exception:
+                pass
+        self.handle_pac_post_circulation = self.run_in(
+            self._end_pac_post,
+            self.pac_post_circulation_s,
+        )
+        self._ensure_pac_flow()
 
     def _pac_off(self, reason, post=True, respect_min_on=False):
         self._cancel_pac_start()
@@ -424,6 +491,10 @@ class SafetyMixin:
         self._recover("pac_climate")
         if state == "off":
             self.pac_deferred_stop_reason = None
+            # Some PACs expose HVAC off before their compressor power has
+            # actually fallen. Preserve circulation for that physical tail.
+            if post and self._pac_power_active():
+                self._start_pac_post_circulation()
             return True
         if respect_min_on:
             if self.pac_compressor_started_at is None and self._pac_power_active():
@@ -447,15 +518,8 @@ class SafetyMixin:
             self._fault("pac_stop", f"échec arrêt PAC: {exc}")
             return False
 
-        if post and self.pac_post_circulation_s > 0:
-            self.pac_post_circulation_until = datetime.datetime.now() + timedelta(seconds=self.pac_post_circulation_s)
-            if self.handle_pac_post_circulation is not None:
-                try:
-                    self.cancel_timer(self.handle_pac_post_circulation)
-                except Exception:
-                    pass
-            self.handle_pac_post_circulation = self.run_in(self._end_pac_post, self.pac_post_circulation_s)
-            self._ensure_pac_flow()
+        if post:
+            self._start_pac_post_circulation()
         return True
 
     def _pac_post_active(self):
@@ -464,6 +528,7 @@ class SafetyMixin:
             return False
         if datetime.datetime.now() >= until:
             self.pac_post_circulation_until = None
+            self.pac_post_circulation_low_since = None
             return False
         return True
 

@@ -29,6 +29,10 @@ def _make_runtime(tmp_path):
     app.chauffage_predictif_rate_model = {}
     app.chauffage_predictif_loss_model = {}
     app.chauffage_predictif_apprentissage_alpha = 0.25
+    app.chauffage_predictif_apprentissage_min_s = 1800
+    app.chauffage_predictif_apprentissage_mesure_hors_pac = True
+    app.chauffage_preset_smart = "Smart"
+    app.entity_pac_climate = "climate.pool_pac"
 
     app.chauffage_predictif_mesure_vitesse_pct = 70
     app.chauffage_predictif_mesure_tempo_s = 900
@@ -54,6 +58,8 @@ def _make_runtime(tmp_path):
     app._heating_learning_session = None
     app._passive_learning_session = None
     app._last_certification_processed_at = None
+    app.chauffage_predictif_last_heating_learning_at = None
+    app.chauffage_predictif_last_learning_event = None
 
     app.water = 25.0
     app.speed = 70
@@ -104,6 +110,9 @@ def test_thermal_learning_is_persisted_and_reloaded(tmp_path):
     }
     app.chauffage_predictif_certified_water_c = 26.4
     app.chauffage_predictif_certified_at = datetime.datetime(2026, 9, 18, 8, 15)
+    app.chauffage_predictif_last_heating_learning_at = datetime.datetime(
+        2026, 9, 18, 12, 30
+    )
     app._save_predictive_learning()
 
     restored = _make_runtime(tmp_path)
@@ -114,6 +123,9 @@ def test_thermal_learning_is_persisted_and_reloaded(tmp_path):
     assert restored.chauffage_predictif_certified_water_c == 26.4
     assert restored.chauffage_predictif_certified_at == datetime.datetime(
         2026, 9, 18, 8, 15
+    )
+    assert restored.chauffage_predictif_last_heating_learning_at == datetime.datetime(
+        2026, 9, 18, 12, 30
     )
 
 
@@ -326,6 +338,72 @@ def test_night_loss_is_rejected_if_pac_or_cover_changed(tmp_path):
         26.6,
     )
     assert app.chauffage_predictif_loss_model == {}
+
+
+def test_failed_morning_measurement_still_blocks_heating_until_retry(tmp_path):
+    app = _make_runtime(tmp_path)
+    now = datetime.datetime.now()
+    app.chauffage_predictif_measurement_failed_at = now
+
+    assert app._measurement_retry_blocked(now) is True
+    assert app._measurement_required_before_action({"should_heat": True}) is True
+
+
+def test_heating_learning_uses_mixed_post_heat_measurement(tmp_path):
+    app = _make_runtime(tmp_path)
+    now = datetime.datetime.now()
+    start = now - datetime.timedelta(minutes=31)
+    app.pac_active = True
+    app.chauffage_predictif_certified_at = start
+    app.chauffage_predictif_certified_water_c = 25.0
+    app._heating_learning_session = {
+        "started_at": start,
+        "start_certified_at": start,
+        "water": 25.0,
+        "preset": "Smart",
+        "ambient_sum": 15.0 * 10,
+        "ambient_count": 10,
+        "power_sum": 1300.0 * 10,
+        "power_count": 10,
+    }
+    app._pac_off = lambda *args, **kwargs: setattr(app, "pac_active", False) or True
+    app._request_predictive_measurement = lambda purpose, start_pump=False: True
+
+    app._maybe_request_learning_measurement(now)
+
+    session = app._heating_learning_session
+    assert session["awaiting_measurement"] is True
+    assert session["heating_elapsed_s"] == 31 * 60
+    assert app.chauffage_predictif_last_heating_learning_at == now
+
+    app.chauffage_predictif_certified_at = now + datetime.timedelta(minutes=3)
+    app.chauffage_predictif_certified_water_c = 25.2
+    app._update_heating_learning(now + datetime.timedelta(minutes=3), 15.0)
+
+    assert app._heating_learning_session is None
+    assert app._learning_sample_count(app.chauffage_predictif_rate_model) == 1
+    assert app.chauffage_predictif_last_learning_event["status"] == "accepté"
+
+
+def test_heating_learning_measurement_is_limited_to_once_per_day(tmp_path):
+    app = _make_runtime(tmp_path)
+    now = datetime.datetime.now()
+    app.pac_active = True
+    app.chauffage_predictif_last_heating_learning_at = now.replace(hour=7)
+    app._heating_learning_session = {
+        "started_at": now - datetime.timedelta(hours=1),
+        "preset": "Smart",
+    }
+    calls = []
+    app._pac_off = lambda *args, **kwargs: calls.append("stop") or True
+    app._request_predictive_measurement = (
+        lambda purpose, start_pump=False: calls.append("measure") or True
+    )
+
+    app._maybe_request_learning_measurement(now)
+
+    assert calls == []
+    assert "awaiting_measurement" not in app._heating_learning_session
 
 
 def test_raw_pipe_temperature_does_not_replace_certified_learning_value(tmp_path):

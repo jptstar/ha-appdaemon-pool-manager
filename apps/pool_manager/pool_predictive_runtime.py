@@ -24,6 +24,185 @@ from pool_predictive import (
 )
 
 
+PREDICTIVE_ATTRIBUTES_MAX_BYTES = 14000
+
+PREDICTIVE_FORECAST_KEYS = (
+    "offset",
+    "date",
+    "temperature",
+    "usage_temperature",
+    "templow",
+    "condition",
+    "score",
+    "usage_score",
+    "confidence",
+    "weekend",
+    "swim",
+    "primary_swim",
+    "preheat",
+    "heating",
+    "mpc_preset",
+    "mpc_heat_hours",
+    "mpc_night_heat_hours",
+    "mpc_energy_kwh",
+    "predicted_water_day_end",
+    "ready_by_hour",
+)
+
+PREDICTIVE_MPC_KEYS = (
+    "date",
+    "swim",
+    "preset",
+    "heat_hours",
+    "day_heat_hours",
+    "night_heat_hours",
+    "ready_by_hour",
+    "start_temperature",
+    "day_end_temperature",
+    "end_temperature",
+    "energy_kwh",
+    "action",
+    "purpose",
+    "target_date",
+    "recoverability_floor",
+)
+
+PREDICTIVE_OPPORTUNITY_KEYS = (
+    "date",
+    "score",
+    "strategic_score",
+    "usage_score",
+    "weekend",
+    "usage_window",
+    "confidence",
+)
+
+
+def _compact_attribute_rows(rows, keys):
+    """Keep only stable dashboard fields from a list of diagnostic mappings."""
+    return [
+        {key: item.get(key) for key in keys if item.get(key) is not None}
+        for item in (rows or [])
+        if isinstance(item, dict)
+    ]
+
+
+def _attribute_payload_bytes(attributes):
+    return len(
+        json.dumps(
+            attributes,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    )
+
+
+def _fit_predictive_attributes(attributes, max_bytes=PREDICTIVE_ATTRIBUTES_MAX_BYTES):
+    """Bound HA state attributes while preserving scalar dashboard controls.
+
+    Home Assistant rejects the complete attribute set above 16 KiB. Start with
+    compact rows, then progressively remove diagnostic-only detail if learned
+    data makes an installation unusually large. The active decision, measured
+    temperatures and next bathing target are never removed.
+    """
+    result = dict(attributes)
+    result["attribute_payload_compacted"] = False
+    result["attribute_payload_omitted"] = []
+    result["attribute_payload_bytes"] = 0
+
+    def payload_size():
+        for _ in range(3):
+            size = _attribute_payload_bytes(result)
+            if result.get("attribute_payload_bytes") == size:
+                return size
+            result["attribute_payload_bytes"] = size
+        return _attribute_payload_bytes(result)
+
+    if payload_size() <= max_bytes:
+        return result
+
+    result["attribute_payload_compacted"] = True
+
+    for key in ("learned_heating_rates", "learned_night_losses"):
+        if key in result:
+            result.pop(key, None)
+            result["attribute_payload_omitted"].append(key)
+        if payload_size() <= max_bytes:
+            return result
+
+    if len(result.get("swim_opportunities") or []) > 5:
+        result["swim_opportunities"] = result["swim_opportunities"][:5]
+        result["attribute_payload_omitted"].append("swim_opportunities_after_5")
+    if payload_size() <= max_bytes:
+        return result
+
+    if "last_learning_event" in result:
+        result.pop("last_learning_event", None)
+        result["attribute_payload_omitted"].append("last_learning_event")
+    if payload_size() <= max_bytes:
+        return result
+
+    plan = result.get("mpc_plan") or []
+    essential_plan = [
+        item
+        for index, item in enumerate(plan)
+        if index == 0
+        or item.get("swim")
+        or float(item.get("heat_hours") or 0.0) > 0.0
+    ]
+    if len(essential_plan) < len(plan):
+        result["mpc_plan"] = essential_plan
+        result["attribute_payload_omitted"].append("idle_mpc_rows")
+    if payload_size() <= max_bytes:
+        return result
+
+    for limit in (12, 10, 7, 5, 3):
+        if len(result.get("forecast") or []) > limit:
+            result["forecast"] = result["forecast"][:limit]
+            result["attribute_payload_omitted"].append(
+                f"forecast_after_{limit}"
+            )
+        if payload_size() <= max_bytes:
+            return result
+
+    for key in ("swim_opportunities", "mpc_plan"):
+        if key in result:
+            result.pop(key, None)
+            result["attribute_payload_omitted"].append(key)
+        if payload_size() <= max_bytes:
+            return result
+
+    # Scalar attributes are deliberately small; this final pass makes the
+    # bound deterministic even if a future optional diagnostic is very large.
+    protected = {
+        "friendly_name",
+        "icon",
+        "mode",
+        "enabled",
+        "action",
+        "water_temperature_estimated",
+        "certified_water_temperature",
+        "target_temperature",
+        "heating_now",
+        "recommended_preset",
+        "next_swim_date",
+        "swim_hour",
+        "swim_hour_weekday",
+        "swim_hour_weekend",
+        "attribute_payload_compacted",
+        "attribute_payload_omitted",
+        "attribute_payload_bytes",
+    }
+    for key in sorted(set(result) - protected):
+        result.pop(key, None)
+        result["attribute_payload_omitted"].append(key)
+        if payload_size() <= max_bytes:
+            break
+    payload_size()
+    return result
+
+
 class PredictiveHeatingSupport(DecisionSupport):
     """Weather forecast + certified measurements + persistent thermal learning."""
 
@@ -1639,9 +1818,40 @@ class PredictiveHeatingSupport(DecisionSupport):
             daylight_active=self._predictive_daylight_active(),
         )
         if self.chauffage_predictif_mpc:
+            legacy_swim_hour = max(
+                0,
+                min(
+                    23,
+                    int(self.args.get("chauffage_predictif_heure_baignade", 15)),
+                ),
+            )
             return build_mpc_plan(
                 **common,
-                swim_hour=max(0, min(23, int(self.args.get("chauffage_predictif_heure_baignade", 15)))),
+                swim_hour=legacy_swim_hour,
+                swim_hour_weekday=max(
+                    0,
+                    min(
+                        23,
+                        int(
+                            self.args.get(
+                                "chauffage_predictif_heure_baignade_semaine",
+                                legacy_swim_hour,
+                            )
+                        ),
+                    ),
+                ),
+                swim_hour_weekend=max(
+                    0,
+                    min(
+                        23,
+                        int(
+                            self.args.get(
+                                "chauffage_predictif_heure_baignade_weekend",
+                                legacy_swim_hour,
+                            )
+                        ),
+                    ),
+                ),
                 allow_night_heating=not economy,
                 heating_safety_factor=float(self.args.get("chauffage_predictif_marge_gain", 0.9)),
                 smart_power_fallback_w=(
@@ -1827,7 +2037,10 @@ class PredictiveHeatingSupport(DecisionSupport):
             if pac_inlet is not None and pac_outlet is not None
             else None
         )
-        rows = dashboard_forecast(forecast, plan or {}, status_now)
+        rows = _compact_attribute_rows(
+            dashboard_forecast(forecast, plan or {}, status_now),
+            PREDICTIVE_FORECAST_KEYS,
+        )
         attributes = {
             "friendly_name": "Piscine chauffage prédictif",
             "icon": "mdi:pool-thermometer",
@@ -1905,6 +2118,8 @@ class PredictiveHeatingSupport(DecisionSupport):
             "decision_choice": (plan or {}).get("decision_choice"),
             "missed_swim_dates": [self._iso_date(d) for d in (plan or {}).get("missed_swim_dates", [])],
             "swim_hour": (plan or {}).get("swim_hour"),
+            "swim_hour_weekday": (plan or {}).get("swim_hour_weekday"),
+            "swim_hour_weekend": (plan or {}).get("swim_hour_weekend"),
             "filtration_target_current_h": getattr(self, "filtration_objectif_actuel_h", None),
             "filtration_target_forecast_h": getattr(self, "filtration_objectif_prevu_h", None),
             "heat_target_temperature": (plan or {}).get("heat_target_c"),
@@ -1943,27 +2158,32 @@ class PredictiveHeatingSupport(DecisionSupport):
                 for item in ((plan or {}).get("swim_dates") or [])
                 if isinstance(item, datetime.date)
             ],
-            "swim_opportunities": [
-                {
-                    **item,
-                    "date": self._iso_date(item.get("date")),
-                }
-                for item in ((plan or {}).get("opportunities") or [])
-                if isinstance(item, dict)
-            ],
+            "swim_opportunities": _compact_attribute_rows(
+                [
+                    {
+                        **item,
+                        "date": self._iso_date(item.get("date")),
+                    }
+                    for item in ((plan or {}).get("opportunities") or [])
+                    if isinstance(item, dict)
+                ],
+                PREDICTIVE_OPPORTUNITY_KEYS,
+            ),
             "mpc_night_energy_required": bool(
                 (plan or {}).get("mpc_night_energy_required")
             ),
-            "mpc_plan": [
-                {
-                    **item,
-                    "date": self._iso_date(item.get("date"))
+            "mpc_plan": _compact_attribute_rows(
+                [
+                    {
+                        **item,
+                        "date": self._iso_date(item.get("date")),
+                        "target_date": self._iso_date(item.get("target_date")),
+                    }
+                    for item in ((plan or {}).get("mpc_plan") or [])
                     if isinstance(item, dict)
-                    else None,
-                }
-                for item in ((plan or {}).get("mpc_plan") or [])
-                if isinstance(item, dict)
-            ],
+                ],
+                PREDICTIVE_MPC_KEYS,
+            ),
             "forecast_horizon_days": self.chauffage_predictif_horizon_jours,
             "forecast": rows,
             "learned_heating_rates": self.chauffage_predictif_rate_model,
@@ -1983,6 +2203,21 @@ class PredictiveHeatingSupport(DecisionSupport):
                 self.chauffage_predictif_forecast_at
             ),
         }
+        attributes = _fit_predictive_attributes(
+            attributes,
+            max_bytes=max(
+                6000,
+                min(
+                    15500,
+                    int(
+                        self.args.get(
+                            "chauffage_predictif_attributs_max_octets",
+                            PREDICTIVE_ATTRIBUTES_MAX_BYTES,
+                        )
+                    ),
+                ),
+            ),
+        )
 
         state = self._predictive_status_state(plan, kind, override=override)
         signature = (

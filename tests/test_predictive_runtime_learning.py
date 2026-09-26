@@ -93,6 +93,49 @@ def _make_runtime(tmp_path):
     return app
 
 
+def test_predictive_attribute_payload_is_bounded_and_keeps_dashboard_fields():
+    verbose = "détail" * 1000
+    attributes = {
+        "friendly_name": "Piscine chauffage prédictif",
+        "action": "PREHEAT",
+        "water_temperature_estimated": 27.3,
+        "target_temperature": 31.0,
+        "recommended_preset": "Turbo",
+        "next_swim_date": "2026-09-27",
+        "forecast": [
+            {"date": f"2026-10-{day:02d}", "condition": verbose}
+            for day in range(1, 16)
+        ],
+        "mpc_plan": [
+            {"date": f"2026-10-{day:02d}", "heat_hours": 0.0}
+            for day in range(1, 16)
+        ],
+        "swim_opportunities": [{"date": "2026-10-01", "raw": verbose}],
+        "learned_heating_rates": {"raw": verbose},
+        "learned_night_losses": {"raw": verbose},
+        "last_learning_event": {"raw": verbose},
+    }
+
+    compact = module._fit_predictive_attributes(attributes, max_bytes=2000)
+
+    assert module._attribute_payload_bytes(compact) <= 2000
+    assert compact["action"] == "PREHEAT"
+    assert compact["water_temperature_estimated"] == 27.3
+    assert compact["target_temperature"] == 31.0
+    assert compact["next_swim_date"] == "2026-09-27"
+    assert compact["attribute_payload_compacted"] is True
+    assert compact["attribute_payload_omitted"]
+
+
+def test_predictive_rows_keep_only_documented_compact_fields():
+    compact = module._compact_attribute_rows(
+        [{"date": "2026-09-27", "swim": True, "raw_weather": "large"}],
+        ("date", "swim"),
+    )
+
+    assert compact == [{"date": "2026-09-27", "swim": True}]
+
+
 def test_thermal_learning_is_persisted_and_reloaded(tmp_path):
     app = _make_runtime(tmp_path)
     app.chauffage_predictif_rate_model = {

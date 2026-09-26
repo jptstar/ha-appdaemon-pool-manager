@@ -10,6 +10,13 @@ secondary: >-
   {% set e = 'sensor.pool_predictive_heating' %}
   {% set action = state_attr(e, 'action') %}
   {% set swim = state_attr(e, 'next_swim_date') %}
+  {% set forecast = state_attr(e, 'forecast') or [] %}
+  {% set ready = namespace(hour=none) %}
+  {% for row in forecast %}
+    {% if row.get('date') == swim and row.get('ready_by_hour') is not none %}
+      {% set ready.hour = row.get('ready_by_hour') | int %}
+    {% endif %}
+  {% endfor %}
   {% set start = state_attr(e, 'recovery_start_date') %}
   {% set preset = state_attr(e, 'recommended_preset') %}
   {% set estimated = state_attr(e, 'water_temperature_estimated') %}
@@ -32,7 +39,7 @@ secondary: >-
    · MPC ~{{ mpc_energy }} kWh
   {% endif %}
   {% if swim %}
-   · 🏊 {{ swim }}{% if start %} · reprise {{ start }}{% endif %}
+   · 🏊 {{ swim }}{% if ready.hour is not none %} à {{ '%02d' | format(ready.hour) }} h{% endif %}{% if start %} · reprise {{ start }}{% endif %}
   {% endif %}
   {% if state_attr(e, 'measurement_active') %}
    · 🌀 Stabilisation mesure température

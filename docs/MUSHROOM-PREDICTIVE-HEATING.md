@@ -23,7 +23,10 @@ The v0.8 adaptive planner publishes a **current thermal decision** plus an energ
 - `thermal_margin_c`: real current-water margin above the adaptive recoverability floor (negative means recovery is already required);
 - `mpc_energy_kwh`: predicted PAC energy for the selected recovery plan;
 - `mpc_night_energy_required`: whether the optimizer had to admit exceptional night heating;
-- `mpc_plan`: predicted day-by-day OFF/Smart/Turbo hours, temperatures and energy;
+- `swim_hour`: today's effective ready-by hour;
+- `swim_hour_weekday` / `swim_hour_weekend`: configured weekly policy;
+- `mpc_plan`: predicted day-by-day OFF/Smart/Turbo hours, temperatures, energy and `ready_by_hour`;
+- `attribute_payload_bytes`, `attribute_payload_compacted` and `attribute_payload_omitted`: Home Assistant payload-budget diagnostics;
 - `predicted_night_loss_c`: predicted cooling before the selected bathing day;
 - `learned_heating_rates`: learned °C/h, power and kWh/°C by PAC preset and outdoor-temperature range;
 - `learned_night_losses`: learned passive night loss by cover state and water/air delta;

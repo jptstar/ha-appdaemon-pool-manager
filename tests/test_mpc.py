@@ -95,6 +95,82 @@ def test_past_deadline_does_not_reappear_through_fallback():
     assert not plan.get("candidate")
 
 
+def test_weekend_deadline_can_be_earlier_than_weekday_deadline():
+    # 2026-09-26 is a Saturday: the weekend noon deadline has passed even
+    # though the legacy 15:00 and weekday 17:00 deadlines have not.
+    now = datetime.datetime(2026, 9, 26, 13)
+    plan = _plan(
+        now,
+        _forecast(now, [(27, "sunny", 15)]),
+        swim_hour=15,
+        swim_hour_weekday=17,
+        swim_hour_weekend=12,
+        water_c=29.8,
+        target_c=30,
+    )
+    assert not plan.get("candidate")
+    assert plan["swim_hour"] == 12
+    assert plan["swim_hour_weekday"] == 17
+    assert plan["swim_hour_weekend"] == 12
+
+
+def test_weekday_deadline_remains_available_until_17h():
+    # 2026-09-28 is a Monday.
+    now = datetime.datetime(2026, 9, 28, 13)
+    plan = _plan(
+        now,
+        _forecast(now, [(27, "sunny", 15)]),
+        swim_hour=15,
+        swim_hour_weekday=17,
+        swim_hour_weekend=12,
+        water_c=29.8,
+        target_c=30,
+    )
+    assert plan["candidate"]["date"] == now.date()
+    assert plan["swim_hour"] == 17
+    assert plan["mpc_plan"][0]["ready_by_hour"] == 17
+
+
+def test_each_future_day_exposes_its_own_ready_by_hour():
+    # Friday followed by Saturday.
+    now = datetime.datetime(2026, 9, 25, 8)
+    plan = _plan(
+        now,
+        _forecast(now, [(27, "sunny", 15), (27, "sunny", 15)]),
+        swim_hour=15,
+        swim_hour_weekday=17,
+        swim_hour_weekend=12,
+        water_c=30,
+        target_c=30,
+    )
+    ready_by = {row["date"]: row["ready_by_hour"] for row in plan["mpc_plan"]}
+    assert ready_by[now.date()] == 17
+    assert ready_by[now.date() + datetime.timedelta(days=1)] == 12
+
+    dashboard = pool_predictive.dashboard_forecast(
+        _forecast(now, [(27, "sunny", 15), (27, "sunny", 15)]),
+        plan,
+        now,
+    )
+    assert dashboard[0]["ready_by_hour"] == 17
+    assert dashboard[1]["ready_by_hour"] == 12
+
+
+def test_legacy_single_deadline_remains_the_fallback():
+    now = datetime.datetime(2026, 9, 26, 14)
+    plan = _plan(
+        now,
+        _forecast(now, [(27, "sunny", 15)]),
+        swim_hour=15,
+        water_c=29.8,
+        target_c=30,
+    )
+    assert plan["candidate"]["date"] == now.date()
+    assert plan["swim_hour"] == 15
+    assert plan["swim_hour_weekday"] == 15
+    assert plan["swim_hour_weekend"] == 15
+
+
 def test_all_unreachable_opportunities_are_visible():
     now = datetime.datetime(2026, 9, 26, 14)
     plan = _plan(now, _forecast(now, [(27, "sunny", 15)]),

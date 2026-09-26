@@ -534,6 +534,7 @@ def _optimize_horizon(
                     "day_heat_hours": round(sim["day_heat_h"], 2),
                     "night_heat_hours": round(sim["night_heat_h"], 2),
                     "day_window_hours": round(available_day_h, 2),
+                    "ready_by_hour": entry.get("_mpc_swim_hour"),
                     "night_window_hours": round(night_window_h, 2),
                     "start_temperature": round(sim["start_c"], 2),
                     "day_end_temperature": round(sim["day_end_c"], 2),
@@ -886,6 +887,8 @@ def build_mpc_plan(
     turbo_penalty_kwh_per_h=0.08,
     night_penalty_kwh_per_h=0.35,
     swim_hour=None,
+    swim_hour_weekday=None,
+    swim_hour_weekend=None,
     allow_night_heating=True,
     heating_safety_factor=1.0,
 ):
@@ -930,23 +933,59 @@ def build_mpc_plan(
 
     # A deadline is a clock time, not a fresh six-hour allowance at every
     # replan. Carry explicit windows in a copy, never mutate weather history.
-    if swim_hour is not None and isinstance(now, datetime.datetime):
-        deadline = now.replace(hour=int(swim_hour), minute=0, second=0, microsecond=0)
+    # Weekday/weekend values are optional; the historical single value remains
+    # the fallback so existing installations retain identical behavior.
+    def normalize_ready_hour(value):
+        if value is None:
+            return None
+        return max(0, min(23, int(value)))
+
+    default_swim_hour = normalize_ready_hour(swim_hour)
+    weekday_swim_hour = normalize_ready_hour(
+        swim_hour_weekday if swim_hour_weekday is not None else default_swim_hour
+    )
+    weekend_swim_hour = normalize_ready_hour(
+        swim_hour_weekend if swim_hour_weekend is not None else default_swim_hour
+    )
+
+    def ready_hour(date_value):
+        return weekend_swim_hour if date_value.weekday() >= 5 else weekday_swim_hour
+
+    today_swim_hour = ready_hour(today)
+    if today_swim_hour is not None and isinstance(now, datetime.datetime):
+        deadline = now.replace(
+            hour=today_swim_hour,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
         if now >= deadline:
             opportunities = [o for o in opportunities if o['date'] != today]
         start_hour = max(0.0, 12.0 - float(day_hours) / 2.0)
         forecast = [dict(row) for row in forecast]
         for row in forecast:
-            if row.get('date') == today:
+            row_date = row.get('date')
+            row_swim_hour = (
+                ready_hour(row_date)
+                if isinstance(row_date, datetime.date)
+                else None
+            )
+            if row_swim_hour is None:
+                continue
+            row['_mpc_swim_hour'] = row_swim_hour
+            if row_date == today:
                 if now >= deadline:
                     row.update(score=0.0, strategic_score=0.0, usage_score=0.0)
                 row['_mpc_swim_hours'] = min(
                     max(0.0, float(today_day_hours_remaining)),
                     max(0.0, (deadline - now).total_seconds() / 3600.0),
-                    max(0.0, float(swim_hour) - start_hour),
+                    max(0.0, float(row_swim_hour) - start_hour),
                 )
             else:
-                row['_mpc_swim_hours'] = min(float(day_hours), max(0.0, float(swim_hour) - start_hour))
+                row['_mpc_swim_hours'] = min(
+                    float(day_hours),
+                    max(0.0, float(row_swim_hour) - start_hour),
+                )
 
     if not opportunities:
         fallback = build_predictive_plan(
@@ -984,6 +1023,9 @@ def build_mpc_plan(
             mpc_plan=[],
             swim_dates=[],
             opportunities=[],
+            swim_hour=today_swim_hour,
+            swim_hour_weekday=weekday_swim_hour,
+            swim_hour_weekend=weekend_swim_hour,
         )
         return fallback
 
@@ -1194,7 +1236,11 @@ def build_mpc_plan(
     return {
         "planner": "MPC",
         "missed_swim_dates": missed_swim_dates,
-        "swim_hour": swim_hour,
+        # Keep the historical attribute meaningful for current-day cards while
+        # publishing the configured weekly policy separately.
+        "swim_hour": today_swim_hour,
+        "swim_hour_weekday": weekday_swim_hour,
+        "swim_hour_weekend": weekend_swim_hour,
         "adaptive_model": True,
         "model_confidence": confidence,
         "action": action,

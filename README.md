@@ -2,16 +2,17 @@
 
 Pool Manager is an AppDaemon application for advanced swimming-pool filtration orchestration in Home Assistant.
 
-### v0.10.5 — Heating decisions
+### v0.10.6 — Weekday/weekend ready-by policy
 
-Predictive heating now uses a configurable ready-by hour (15:00 by default)
-and a conservative net-heating margin. Exceptional Turbo/night requests and
-unreachable bathing targets produce a confirmation request. Without a reply,
-the controller recalculates a daytime Smart plan. Configure
-`pool_notify_service: notify.mobile_app_YOUR_PHONE` for mobile action buttons,
-or install the optional decision package/card in `examples/` for dashboard
-responses. Existing entity IDs and manual Turbo timer modes are unchanged.
-See [release notes](docs/v0.10.5-RELEASE.md) for setup and limitations.
+Predictive heating can now use different local ready-by hours on weekdays and
+weekends. Existing installations that only configure
+`chauffage_predictif_heure_baignade` retain the previous single-deadline
+behavior. The example policy targets 17:00 Monday-Friday and 12:00 Saturday-
+Sunday, and every MPC row exposes the applicable deadline. Existing entity IDs,
+confirmation actions and manual Turbo timer modes are unchanged. The predictive
+sensor now stays below Home Assistant's attribute-size limit by publishing
+compact forecast/MPC rows with a 14,000-byte safety budget. See
+[release notes](docs/v0.10.6-RELEASE.md) for configuration and compatibility.
 
 It is deliberately **not a hardware integration**. Device protocols remain handled by dedicated Home Assistant integrations (for example an Aquagem variable-speed pump integration or an AstralPool/heat-pump integration). Pool Manager consumes their Home Assistant entities and coordinates filtration, solar surplus, heat-pump flow requirements, daily filtration quota, freeze protection, night circulation and chlorination.
 
@@ -178,6 +179,12 @@ entity_meteo_chauffage_predictif: weather.home
 entity_chauffage_predictif_status: sensor.pool_predictive_heating
 entity_chauffage_predictif_score: sensor.piscine_score_baignade
 chauffage_predictif_horizon_jours: 15
+
+# Optional split schedule; the historical single hour remains the fallback.
+chauffage_predictif_heure_baignade: 15
+chauffage_predictif_heure_baignade_semaine: 17
+chauffage_predictif_heure_baignade_weekend: 12
+chauffage_predictif_attributs_max_octets: 14000
 
 chauffage_predictif_temperature_baignade_min_c: 21
 chauffage_predictif_temperature_baignade_ideale_c: 26
@@ -374,13 +381,27 @@ If `entity_chauffage_predictif_status` is configured, useful attributes now incl
 - `predicted_night_loss_c`
 - `mpc_energy_kwh`
 - `mpc_night_energy_required`
-- `mpc_plan`
+- `swim_hour`
+- `swim_hour_weekday`
+- `swim_hour_weekend`
+- `mpc_plan` (including each row's `ready_by_hour`)
 - `learned_heating_rates`
 - `learned_night_losses`
 - `heating_learning_samples`
 - `night_loss_learning_samples`
 - `last_learning_event`
+- `attribute_payload_bytes`
+- `attribute_payload_compacted`
+- `attribute_payload_omitted`
 - `forecast`
+
+`forecast`, `mpc_plan` and `swim_opportunities` publish compact dashboard fields
+instead of duplicating raw weather and internal optimizer data. If an unusually
+large learned model still approaches the configured budget, diagnostic-only
+details are progressively omitted while current temperatures, action, target,
+next bathing date and recommended preset remain available. Detailed chronological
+events remain in `sensor.pool_manager_log`; no template helper should recreate
+the AppDaemon-owned predictive sensor.
 
 ## Aquagem / iSaver local-control handover
 

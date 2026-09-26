@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.10.6 - Weekday/weekend ready-by policy
+
+- Add optional `chauffage_predictif_heure_baignade_semaine` and `chauffage_predictif_heure_baignade_weekend` deadlines.
+- Preserve `chauffage_predictif_heure_baignade` as the compatible fallback when either new setting is absent.
+- Apply the correct deadline independently to every day in the receding MPC horizon.
+- Expose today's effective `swim_hour`, both weekly policy hours and each MPC row's `ready_by_hour`.
+- Compact duplicated forecast/MPC diagnostics and enforce a configurable 14,000-byte attribute budget so Home Assistant records the predictive sensor reliably.
+- Keep presence/geolocation outside this release; it can later supply a dynamic exception without changing the deterministic weekly fallback.
+- See `docs/v0.10.6-RELEASE.md` for configuration and migration.
+
 ## 0.10.5 - Ready-by heating, forecast filtration and user decisions
 
 - Bound today's MPC swimming window by a configurable local deadline and expose discarded unreachable targets.

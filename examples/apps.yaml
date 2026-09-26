@@ -1,8 +1,12 @@
 pool_manager:
   module: filtration_piscine
   class: FiltrationPiscine
-  # Ready-by local hour. Conservative net-heating margin (0.9 = -10%).
+  # Ready-by local hours. The historical single value remains the fallback.
   chauffage_predictif_heure_baignade: 15
+  chauffage_predictif_heure_baignade_semaine: 17
+  chauffage_predictif_heure_baignade_weekend: 12
+  # Keep the predictive entity safely below Home Assistant's 16 KiB limit.
+  chauffage_predictif_attributs_max_octets: 14000
   chauffage_predictif_marge_gain: 0.9
   pool_confirmation_enabled: true
   # Replace with your actual Companion notification service to enable mobile buttons.

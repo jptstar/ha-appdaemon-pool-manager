@@ -1211,6 +1211,7 @@ def dashboard_forecast(forecast, plan, today):
                 "mpc_action": mpc_item.get("action"),
                 "mpc_purpose": mpc_item.get("purpose"),
                 "mpc_target_date": target_date,
+                "ready_by_hour": mpc_item.get("ready_by_hour"),
                 "recoverability_floor": _number(
                     mpc_item.get("recoverability_floor")
                 ),
@@ -1233,4 +1234,3 @@ def dashboard_forecast(forecast, plan, today):
             }
         )
     return rows
-

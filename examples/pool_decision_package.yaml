@@ -1,0 +1,21 @@
+# Optional Home Assistant package. The decision sensor is published by
+# AppDaemon; do not create a template/helper with the same entity ID.
+script:
+  piscine_decision_economie:
+    alias: Piscine - privilégier économie
+    sequence:
+      - event: mobile_app_notification_action
+        event_data:
+          action: "{{ state_attr('sensor.piscine_decision_chauffage', 'eco') or '' }}"
+  piscine_decision_turbo:
+    alias: Piscine - confirmer Turbo 1 h
+    sequence:
+      - event: mobile_app_notification_action
+        event_data:
+          action: "{{ state_attr('sensor.piscine_decision_chauffage', 'turbo') or '' }}"
+  piscine_decision_suspendre:
+    alias: Piscine - suspendre chauffage aujourd'hui
+    sequence:
+      - event: mobile_app_notification_action
+        event_data:
+          action: "{{ state_attr('sensor.piscine_decision_chauffage', 'skip') or '' }}"

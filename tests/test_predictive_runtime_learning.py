@@ -351,6 +351,7 @@ def test_failed_morning_measurement_still_blocks_heating_until_retry(tmp_path):
 
 def test_heating_learning_uses_mixed_post_heat_measurement(tmp_path):
     app = _make_runtime(tmp_path)
+    app._predictive_daylight_active = lambda: True
     now = datetime.datetime.now()
     start = now - datetime.timedelta(minutes=31)
     app.pac_active = True
@@ -404,6 +405,23 @@ def test_heating_learning_measurement_is_limited_to_once_per_day(tmp_path):
 
     assert calls == []
     assert "awaiting_measurement" not in app._heating_learning_session
+
+
+def test_learning_does_not_reset_at_midnight_or_interrupt_night_heat(tmp_path):
+    app = _make_runtime(tmp_path)
+    now = datetime.datetime(2026, 9, 26, 0, 1)
+    app.pac_active = True
+    app.chauffage_predictif_last_heating_learning_at = now - datetime.timedelta(hours=16)
+    app._heating_learning_session = {"started_at": now - datetime.timedelta(hours=1)}
+    calls = []
+    app._pac_off = lambda *a, **kw: calls.append("stop") or True
+    app._predictive_daylight_active = lambda: True
+    app._maybe_request_learning_measurement(now)
+    assert not calls
+    app.chauffage_predictif_last_heating_learning_at = now - datetime.timedelta(hours=25)
+    app._predictive_daylight_active = lambda: False
+    app._maybe_request_learning_measurement(now)
+    assert not calls
 
 
 def test_raw_pipe_temperature_does_not_replace_certified_learning_value(tmp_path):

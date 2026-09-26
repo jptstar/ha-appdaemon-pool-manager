@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.10.5 - Ready-by heating, forecast filtration and user decisions
+
+- Bound today's MPC swimming window by a configurable local deadline and expose discarded unreachable targets.
+- Apply a configurable conservative heating-rate margin, without changing learned samples.
+- Reserve filtration against today's fresh, applied heating trajectory.
+- Ask for exceptional heating decisions through Companion actions or a persistent notification/dashboard; default to a recomputed daytime Smart plan.
+- Expire and deduplicate responses; preserve existing Turbo timer, safety and entity contracts.
+- Space learning interruptions by 24 elapsed hours and avoid nighttime interruption.
+- See `docs/v0.10.5-RELEASE.md` for configuration, defaults and model limitations.
+
 ## 0.10.4 - Observable thermal learning and physical PAC shutdown
 
 - Keep filtration circulating after a PAC stop until compressor power has stayed below its active threshold, including when Home Assistant already reports the climate entity as `off`.

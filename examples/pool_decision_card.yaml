@@ -1,0 +1,30 @@
+type: conditional
+conditions:
+  - entity: sensor.piscine_decision_chauffage
+    state: "À confirmer"
+card:
+  type: vertical-stack
+  cards:
+    - type: markdown
+      content: >-
+        {{ state_attr('sensor.piscine_decision_chauffage', 'message') }}
+    - type: horizontal-stack
+      cards:
+        - type: button
+          name: Économie
+          icon: mdi:leaf
+          tap_action:
+            action: perform-action
+            perform_action: script.piscine_decision_economie
+        - type: button
+          name: Turbo 1 h
+          icon: mdi:fire
+          tap_action:
+            action: perform-action
+            perform_action: script.piscine_decision_turbo
+        - type: button
+          name: Suspendre aujourd'hui
+          icon: mdi:pause
+          tap_action:
+            action: perform-action
+            perform_action: script.piscine_decision_suspendre

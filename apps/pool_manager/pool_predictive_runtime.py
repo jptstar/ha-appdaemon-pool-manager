@@ -8,6 +8,7 @@ import json
 import os
 
 from pool_mpc import build_mpc_plan
+from pool_decision import DecisionSupport
 from pool_predictive import (
     build_predictive_plan,
     dashboard_forecast,
@@ -23,7 +24,7 @@ from pool_predictive import (
 )
 
 
-class PredictiveHeatingSupport:
+class PredictiveHeatingSupport(DecisionSupport):
     """Weather forecast + certified measurements + persistent thermal learning."""
 
     @staticmethod
@@ -60,6 +61,7 @@ class PredictiveHeatingSupport:
         return default
 
     def _initialize_predictive_heating(self):
+        self._initialize_pool_decisions()
         self.chauffage_predictif = self._bool_value(
             self._predictive_arg("chauffage_predictif", "fin_saison_predictif", "false")
         )
@@ -1420,8 +1422,10 @@ class PredictiveHeatingSupport:
         last_learning_at = self.chauffage_predictif_last_heating_learning_at
         if (
             isinstance(last_learning_at, datetime.datetime)
-            and last_learning_at.date() == now.date()
+            and (now - last_learning_at).total_seconds() < 24 * 3600
         ):
+            return
+        if not self._predictive_daylight_active():
             return
         session = self._heating_learning_session
         if not session or session.get("awaiting_measurement"):
@@ -1605,7 +1609,7 @@ class PredictiveHeatingSupport:
             return self.chauffage_predictif_plancher_fin_saison_delta_c
         return self.chauffage_predictif_plancher_auto_delta_c
 
-    def _build_runtime_predictive_plan(self, kind, water, target, forecast):
+    def _build_runtime_predictive_plan(self, kind, water, target, forecast, economy=False):
         day_hours = self._predictive_daylight_hours()
         remaining = self._predictive_daylight_hours_remaining()
         common = dict(
@@ -1624,7 +1628,7 @@ class PredictiveHeatingSupport:
             score_min=self.chauffage_predictif_score_baignade_min,
             min_air_c=self.chauffage_predictif_temperature_baignade_min_c,
             smart_preset=self.chauffage_preset_smart,
-            turbo_preset=self.chauffage_preset_turbo,
+            turbo_preset=self.chauffage_preset_smart if economy else self.chauffage_preset_turbo,
             day_hours=day_hours,
             today_day_hours_remaining=remaining,
             candidate_day_hours=self.chauffage_predictif_heures_jour_baignade,
@@ -1637,6 +1641,9 @@ class PredictiveHeatingSupport:
         if self.chauffage_predictif_mpc:
             return build_mpc_plan(
                 **common,
+                swim_hour=max(0, min(23, int(self.args.get("chauffage_predictif_heure_baignade", 15)))),
+                allow_night_heating=not economy,
+                heating_safety_factor=float(self.args.get("chauffage_predictif_marge_gain", 0.9)),
                 smart_power_fallback_w=(
                     self.chauffage_predictif_mpc_puissance_smart_w
                 ),
@@ -1646,7 +1653,7 @@ class PredictiveHeatingSupport:
                 step_h=self.chauffage_predictif_mpc_pas_h,
                 state_step_c=self.chauffage_predictif_mpc_pas_temperature_c,
                 turbo_penalty_kwh_per_h=(
-                    self.chauffage_predictif_mpc_penalite_turbo_kwh_h
+                    0.0 if economy else self.chauffage_predictif_mpc_penalite_turbo_kwh_h
                 ),
                 night_penalty_kwh_per_h=(
                     self.chauffage_predictif_mpc_penalite_nuit_kwh_h
@@ -1894,6 +1901,12 @@ class PredictiveHeatingSupport:
                 "trajectory_target_c"
             ),
             "heating_now": bool((plan or {}).get("should_heat")),
+            "decision_required": bool((plan or {}).get("decision_required")),
+            "decision_choice": (plan or {}).get("decision_choice"),
+            "missed_swim_dates": [self._iso_date(d) for d in (plan or {}).get("missed_swim_dates", [])],
+            "swim_hour": (plan or {}).get("swim_hour"),
+            "filtration_target_current_h": getattr(self, "filtration_objectif_actuel_h", None),
+            "filtration_target_forecast_h": getattr(self, "filtration_objectif_prevu_h", None),
             "heat_target_temperature": (plan or {}).get("heat_target_c"),
             "recommended_preset": (plan or {}).get("preset"),
             "night_heating": bool((plan or {}).get("night_heating")),
@@ -1984,6 +1997,10 @@ class PredictiveHeatingSupport:
             attributes.get("current_cover"),
             attributes.get("target_temperature"),
             attributes.get("heating_now"),
+            attributes.get("decision_required"),
+            attributes.get("decision_choice"),
+            attributes.get("missed_swim_dates"),
+            attributes.get("filtration_target_forecast_h"),
             attributes.get("recommended_preset"),
             attributes.get("next_swim_date"),
             attributes.get("planner"),
@@ -2168,6 +2185,10 @@ class PredictiveHeatingSupport:
             forecast,
         )
         self.chauffage_predictif_last_plan = plan
+        plan = self._apply_pool_decision(plan, water, target, economy_plan=lambda: self._build_runtime_predictive_plan(
+            kind, water, target, forecast, economy=True))
+        self.chauffage_predictif_last_plan = plan
+        self.chauffage_predictif_last_plan_at = datetime.datetime.now()
 
         # WAIT/PRESERVE-without-heat requests a stop, but a compressor that has
         # just started keeps its configured minimum run time. Safety and

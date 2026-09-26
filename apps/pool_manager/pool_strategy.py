@@ -89,7 +89,9 @@ class StrategyMixin:
             }
 
         temps_restant_h = self.temps_restant_avant_limite_quota_h()
+        today = datetime.date.today()
         if temps_restant_h <= 0 or vitesse_requise > self.vitesse_max_garantie_quota:
+            self._quota_impossible_day = today
             return {
                 "critique": False,
                 "recuperable": False,
@@ -101,6 +103,12 @@ class StrategyMixin:
         vitesse_ref = max(self.vitesse_min_filtration_utile, self.vitesse_reference_filtration)
         capacite_max_eq = temps_restant_h * (self.vitesse_max_garantie_quota / vitesse_ref)
         reserve_eq_h = max(0.0, capacite_max_eq - reste_temps_eq)
+        # Small temperature variations must not alternate full speed/economy
+        # every few seconds at the exact mathematical feasibility boundary.
+        if getattr(self, "_quota_impossible_day", None) == today and reserve_eq_h < 0.15:
+            return {"critique": False, "recuperable": False,
+                    "vitesse": vitesse, "vitesse_requise": vitesse_requise}
+        self._quota_impossible_day = None
 
         # Keep a small equivalent-filtration reserve before quota becomes a
         # hard priority. This lets solar/PID consume available PV first.

@@ -72,6 +72,13 @@ def test_impossible_quota_does_not_force_100_percent():
     assert state["vitesse_requise"] > 100
 
 
+def test_quota_boundary_does_not_toggle_full_speed_on_small_sensor_changes():
+    strategy = FakeStrategy(remaining_h=2.8)
+    assert not strategy.etat_garantie_quota(10, 14.1)["recuperable"]
+    assert not strategy.etat_garantie_quota(10, 13.99)["recuperable"]
+    assert strategy.etat_garantie_quota(10, 13.7)["recuperable"]
+
+
 def test_recoverable_quota_only_becomes_hard_priority_near_limit():
     strategy = FakeStrategy(remaining_h=4.0)
 

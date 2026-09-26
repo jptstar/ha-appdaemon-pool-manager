@@ -6,6 +6,21 @@ from datetime import timedelta
 
 from pool_common import *
 
+
+def forecast_filtration_target(current, water, coefficient, curve, plan, planned_at, now):
+    """Reserve only today's fresh, authorized temperature trajectory."""
+    if (not isinstance(planned_at, datetime.datetime)
+            or not 0 <= (now - planned_at).total_seconds() <= 300
+            or not plan.get("should_heat")):
+        return current
+    for day in plan.get("mpc_plan") or []:
+        if day.get("date") == now.date() and float(day.get("day_heat_hours") or 0) > 0:
+            predicted = min(float(day.get("day_end_temperature") or water),
+                            float(plan.get("heat_target_c") or water))
+            return max(current, calcule_objectif_filtration(predicted, coefficient, curve))
+    return current
+
+
 class ControlMixin:
 
     def _traitement_filtration(self, kwargs):
@@ -48,6 +63,12 @@ class ControlMixin:
         # Une journée ne peut jamais demander plus de 24 h équivalentes.
         # Le même plafond est utilisé pour l'affichage, le quota et le planning.
         temps_filtration = calcule_objectif_filtration(temperature_eau, coef, mode_calcul == "on")
+        self.filtration_objectif_actuel_h = temps_filtration
+        plan = getattr(self, "chauffage_predictif_last_plan", None) or {}
+        planned_at = getattr(self, "chauffage_predictif_last_plan_at", None)
+        temps_filtration = forecast_filtration_target(
+            temps_filtration, temperature_eau, coef, mode_calcul == "on", plan, planned_at, now_dt)
+        self.filtration_objectif_prevu_h = temps_filtration
         self.set_value(self.args["duree_filtration_ete"], round(temps_filtration, 2))
 
         objectif_temps_eq = temps_filtration

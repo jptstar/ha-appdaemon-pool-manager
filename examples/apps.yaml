@@ -1,6 +1,13 @@
 pool_manager:
   module: filtration_piscine
   class: FiltrationPiscine
+  # Ready-by local hour. Conservative net-heating margin (0.9 = -10%).
+  chauffage_predictif_heure_baignade: 15
+  chauffage_predictif_marge_gain: 0.9
+  pool_confirmation_enabled: true
+  # Replace with your actual Companion notification service to enable mobile buttons.
+  # Without it, a persistent HA notification + the optional dashboard card are available.
+  # pool_notify_service: notify.mobile_app_your_phone
 
   # Main sensors
   temperature_eau: sensor.pool_water_temperature

@@ -72,6 +72,66 @@ def _plan(now, forecast, **kwargs):
     return pool_mpc.build_mpc_plan(**defaults)
 
 
+def test_today_deadline_cannot_borrow_afternoon_hours():
+    now = datetime.datetime(2026, 9, 26, 14)
+    forecast = _forecast(now, [(27, "sunny", 15), (27, "sunny", 15)])
+    plan = _plan(now, forecast, swim_hour=15, water_c=27, target_c=31,
+                 today_day_hours_remaining=6)
+    assert now.date() in plan["missed_swim_dates"]
+    assert now.date() not in plan["swim_dates"]
+
+
+def test_today_remains_candidate_before_deadline_when_reachable():
+    now = datetime.datetime(2026, 9, 26, 10)
+    plan = _plan(now, _forecast(now, [(27, "sunny", 15)]),
+                 swim_hour=15, water_c=29.8, target_c=30)
+    assert plan["candidate"]["date"] == now.date()
+    assert plan["mpc_plan"][0]["day_window_hours"] <= 5
+
+
+def test_past_deadline_does_not_reappear_through_fallback():
+    now = datetime.datetime(2026, 9, 26, 16)
+    plan = _plan(now, _forecast(now, [(27, "sunny", 15)]), swim_hour=15)
+    assert not plan.get("candidate")
+
+
+def test_all_unreachable_opportunities_are_visible():
+    now = datetime.datetime(2026, 9, 26, 14)
+    plan = _plan(now, _forecast(now, [(27, "sunny", 15)]),
+                 swim_hour=15, water_c=22, target_c=31)
+    assert plan["missed_swim_dates"] == [now.date()]
+
+
+def test_economy_never_schedules_night_heating():
+    now = datetime.datetime(2026, 9, 26, 10)
+    plan = _plan(now, _forecast(now, [(18, "cloudy", 10), (27, "sunny", 15)]),
+                 turbo_preset="Smart", allow_night_heating=False)
+    assert all(row["night_heat_hours"] == 0 for row in plan["mpc_plan"])
+
+
+def test_turbo_is_selected_when_it_can_meet_deadline_and_smart_cannot():
+    now = datetime.datetime(2026, 9, 26, 11)
+    learned = {"smart": {"ge25": {"rate": .2, "count": 30}},
+               "turbo": {"ge25": {"rate": .7, "count": 30}}}
+    plan = _plan(now, _forecast(now, [(27, "sunny", 15)]), swim_hour=15,
+                 water_c=29, target_c=31, heating_rate_model=learned)
+    assert plan["preset"] == "Turbo"
+    assert not plan["missed_swim_dates"]
+
+
+def test_missing_today_weather_does_not_run_tomorrows_heat_today():
+    now = datetime.datetime(2026, 9, 26, 11)
+    forecast = _forecast(now, [(27, "sunny", 15), (27, "sunny", 15)])[1:]
+    plan = _plan(now, forecast, water_c=29, target_c=30)
+    assert not plan["should_heat"]
+
+
+def test_smart_only_uses_smart_power_even_when_both_preset_names_match():
+    model = pool_mpc.AdaptiveThermalModel(base_heating_rate_c_per_h=.3,
+                                         smart_preset="Smart", turbo_preset="Smart")
+    assert model.heating_power_w("Smart", 20) == 1200
+
+
 def test_adaptive_model_confidence_uses_persistent_sample_counts():
     model = pool_mpc.AdaptiveThermalModel(
         base_heating_rate_c_per_h=0.3,

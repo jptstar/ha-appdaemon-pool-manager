@@ -112,13 +112,14 @@ class AdaptiveThermalModel:
             preset,
             ambient_c,
             learned_model=self.heating_model,
-        )
+        ) * getattr(self, "heating_safety_factor", 1.0)
 
     def heating_power_w(self, preset, ambient_c):
         key = normalize_preset_name(preset)
         fallback = (
             self.turbo_power_fallback_w
             if key == normalize_preset_name(self.turbo_preset)
+            and key != normalize_preset_name(self.smart_preset)
             else self.smart_power_fallback_w
         )
         learned = ((self.heating_model.get(key) or {}).get(ambient_bin(ambient_c)) or {})
@@ -452,12 +453,17 @@ def _optimize_horizon(
 
     for index, date_value in enumerate(dates):
         swim_day = date_value in swim_dates
-        if index == 0:
+        if date_value == today:
             available_day_h = max(0.0, float(today_day_hours_remaining))
         elif swim_day:
             available_day_h = max(0.0, float(candidate_day_hours))
         else:
             available_day_h = max(0.0, float(day_hours))
+
+        if swim_day:
+            deadline_hours = (by_date.get(date_value) or {}).get('_mpc_swim_hours')
+            if deadline_hours is not None:
+                available_day_h = min(available_day_h, max(0.0, deadline_hours))
 
         night_window_h = max(0.0, float(night_hours))
         heat_night_h = night_window_h if allow_night else 0.0
@@ -879,6 +885,9 @@ def build_mpc_plan(
     state_step_c=0.2,
     turbo_penalty_kwh_per_h=0.08,
     night_penalty_kwh_per_h=0.35,
+    swim_hour=None,
+    allow_night_heating=True,
+    heating_safety_factor=1.0,
 ):
     """Build a full-horizon adaptive energy-minimizing thermal plan.
 
@@ -909,6 +918,7 @@ def build_mpc_plan(
         turbo_power_fallback_w=turbo_power_fallback_w,
     )
     confidence = model.confidence()
+    model.heating_safety_factor = max(0.5, min(1.0, float(heating_safety_factor)))
 
     opportunities = find_swim_opportunities(
         forecast,
@@ -917,6 +927,26 @@ def build_mpc_plan(
         min_air_c=min_air_c,
         weekend_bonus=weekend_bonus,
     )
+
+    # A deadline is a clock time, not a fresh six-hour allowance at every
+    # replan. Carry explicit windows in a copy, never mutate weather history.
+    if swim_hour is not None and isinstance(now, datetime.datetime):
+        deadline = now.replace(hour=int(swim_hour), minute=0, second=0, microsecond=0)
+        if now >= deadline:
+            opportunities = [o for o in opportunities if o['date'] != today]
+        start_hour = max(0.0, 12.0 - float(day_hours) / 2.0)
+        forecast = [dict(row) for row in forecast]
+        for row in forecast:
+            if row.get('date') == today:
+                if now >= deadline:
+                    row.update(score=0.0, strategic_score=0.0, usage_score=0.0)
+                row['_mpc_swim_hours'] = min(
+                    max(0.0, float(today_day_hours_remaining)),
+                    max(0.0, (deadline - now).total_seconds() / 3600.0),
+                    max(0.0, float(swim_hour) - start_hour),
+                )
+            else:
+                row['_mpc_swim_hours'] = min(float(day_hours), max(0.0, float(swim_hour) - start_hour))
 
     if not opportunities:
         fallback = build_predictive_plan(
@@ -961,6 +991,7 @@ def build_mpc_plan(
     # physically unreachable even with exceptional night heating, discard only
     # that failed target and preserve the rest of the horizon.
     active_swim_dates = sorted({item["date"] for item in opportunities})
+    missed_swim_dates = []
     optimized = None
     used_night = False
     while active_swim_dates:
@@ -984,7 +1015,7 @@ def build_mpc_plan(
             allow_night=False,
         )
         used_night = False
-        if optimized is None:
+        if optimized is None and allow_night_heating:
             optimized, night_failed_date = _optimize_horizon(
                 now=now,
                 water_c=water,
@@ -1012,6 +1043,7 @@ def build_mpc_plan(
             break
 
         if failed_date in active_swim_dates:
+            missed_swim_dates.append(failed_date)
             active_swim_dates.remove(failed_date)
         else:
             break
@@ -1052,6 +1084,7 @@ def build_mpc_plan(
             mpc_plan=[],
             swim_dates=[],
             opportunities=opportunities,
+            missed_swim_dates=missed_swim_dates,
             reason="aucune fenêtre baignade thermiquement atteignable; réserve minimale",
         )
         return fallback
@@ -1107,7 +1140,7 @@ def build_mpc_plan(
     heat_today_h = float(first.get("day_heat_hours") or 0.0)
     night_today_h = float(first.get("night_heat_hours") or 0.0)
     current_heat_h = heat_today_h if daylight_active else night_today_h
-    should_heat = current_heat_h > 0.0
+    should_heat = first["date"] == today and current_heat_h > 0.0
 
     if first.get("swim"):
         action = "MAINTAIN"
@@ -1160,6 +1193,8 @@ def build_mpc_plan(
 
     return {
         "planner": "MPC",
+        "missed_swim_dates": missed_swim_dates,
+        "swim_hour": swim_hour,
         "adaptive_model": True,
         "model_confidence": confidence,
         "action": action,
@@ -1196,4 +1231,3 @@ def build_mpc_plan(
         "mpc_plan": path,
         "reason": reason,
     }
-

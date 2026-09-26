@@ -2,6 +2,17 @@
 
 Pool Manager is an AppDaemon application for advanced swimming-pool filtration orchestration in Home Assistant.
 
+### v0.10.5 — Heating decisions
+
+Predictive heating now uses a configurable ready-by hour (15:00 by default)
+and a conservative net-heating margin. Exceptional Turbo/night requests and
+unreachable bathing targets produce a confirmation request. Without a reply,
+the controller recalculates a daytime Smart plan. Configure
+`pool_notify_service: notify.mobile_app_YOUR_PHONE` for mobile action buttons,
+or install the optional decision package/card in `examples/` for dashboard
+responses. Existing entity IDs and manual Turbo timer modes are unchanged.
+See [release notes](docs/v0.10.5-RELEASE.md) for setup and limitations.
+
 It is deliberately **not a hardware integration**. Device protocols remain handled by dedicated Home Assistant integrations (for example an Aquagem variable-speed pump integration or an AstralPool/heat-pump integration). Pool Manager consumes their Home Assistant entities and coordinates filtration, solar surplus, heat-pump flow requirements, daily filtration quota, freeze protection, night circulation and chlorination.
 
 ## Architecture

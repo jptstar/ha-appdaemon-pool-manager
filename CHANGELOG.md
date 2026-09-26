@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.10.10 - Clear MPC Turbo and exception language
+
+- Rename the persistent decision helper to `Dérogation exceptionnelle de chauffe` and its neutral option to `Suivre le plan Smart`.
+- Preserve `Plan intelligent` as a compatible input value during migration.
+- Make the heating card distinguish a manual Turbo from a Turbo selected by the Smart/MPC plan.
+- Keep day-only, night authorization and suspension as bounded exceptions; they are not PAC operating modes.
+- Validation: 182 tests passed.
+
+## 0.10.9 - Persistent manual heating policy
+
+- Add the optional `input_select.piscine_decision_manuelle` integration so a decision can be changed at any time, including after a notification expires.
+- Apply `Journée seulement`, `Autoriser cette nuit` and `Suspendre aujourd'hui` immediately; `Plan intelligent` clears the temporary policy and returns control to MPC.
+- Keep the choices bounded: day-only and suspension end at midnight; night authorization ends at the next dawn.
+- Preserve mobile notification actions, entity IDs and all PAC safety gates.
+- Validation: 182 tests passed.
+
 ## 0.10.8 - Bound night authorization to dawn
 
 - Expire night authorization at the next sunrise, including the configured morning margin, instead of an arbitrary 18 hours after confirmation.

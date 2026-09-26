@@ -13,6 +13,9 @@ class DecisionSupport:
         self._pool_decision_choice_until = None
         self._pool_notice_key = None
         self._pool_notices = set()
+        self.entity_pool_decision_manual = self.args.get(
+            "entity_pool_decision_manual", "input_select.piscine_decision_manuelle"
+        )
         # Keep an explicit daily choice through AppDaemon/HACS reloads. Old
         # notification tokens are deliberately not restored.
         try:
@@ -41,6 +44,11 @@ class DecisionSupport:
         self.listen_event(
             self._pool_notification_action, "mobile_app_notification_action"
         )
+        # This selector is deliberately permanent: unlike a notification it
+        # remains available on the dashboard after the 30-minute prompt ends.
+        self.listen_state(
+            self._pool_manual_decision_changed, self.entity_pool_decision_manual
+        )
 
     @staticmethod
     def _parse_pool_datetime(value):
@@ -57,10 +65,54 @@ class DecisionSupport:
                 return choice
             self._pool_decision_choice = None
             self._pool_decision_choice_until = None
+            self._set_pool_manual_decision("Suivre le plan Smart")
             return None
         if getattr(self, "_pool_decision_day", None) == now.date():
             return choice
         return None
+
+    def _set_pool_manual_decision(self, option):
+        """Reflect a mobile answer/expiry in the persistent HA selector."""
+        try:
+            if self.get_state(self.entity_pool_decision_manual) != option:
+                self.call_service(
+                    "input_select/select_option",
+                    entity_id=self.entity_pool_decision_manual,
+                    option=option,
+                )
+        except Exception:
+            # The helper is optional for existing installations.
+            pass
+
+    def _pool_manual_decision_changed(self, entity, attribute, old, new, kwargs):
+        """Apply an explicit dashboard policy immediately, with bounded scope."""
+        if new == old:
+            return
+        choices = {
+            "Journée seulement": "eco",
+            "Autoriser cette nuit": "night",
+            "Suspendre aujourd'hui": "skip",
+        }
+        now = datetime.datetime.now()
+        # "Plan intelligent" was the v0.10.9 label. Keep accepting it so an
+        # existing helper can be migrated without losing its current state.
+        if new in {"Plan intelligent", "Suivre le plan Smart"}:
+            self._pool_pending = None
+            self._pool_decision_day = None
+            self._pool_decision_choice = None
+            self._pool_decision_choice_until = None
+            self._publish_pool_decision()
+            self.traitement({})
+            return
+        choice = choices.get(new)
+        if choice is None:
+            return
+        self._pool_pending = None
+        self._pool_decision_day = now.date()
+        self._pool_decision_choice = choice
+        self._pool_decision_choice_until = self._pool_choice_deadline(choice, now)
+        self._publish_pool_decision()
+        self.traitement({})
 
     def _pool_choice_deadline(self, choice, now):
         if choice == "night":
@@ -175,6 +227,13 @@ class DecisionSupport:
         self._pool_decision_day = now.date()
         self._pool_decision_choice = choice
         self._pool_decision_choice_until = self._pool_choice_deadline(choice, now)
+        selector_option = {
+            "eco": "Journée seulement",
+            "night": "Autoriser cette nuit",
+            "skip": "Suspendre aujourd'hui",
+        }.get(choice)
+        if selector_option:
+            self._set_pool_manual_decision(selector_option)
         self._publish_pool_decision()
         self._pool_notify(
             {

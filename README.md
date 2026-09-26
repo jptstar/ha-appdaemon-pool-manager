@@ -2,6 +2,21 @@
 
 Pool Manager is an AppDaemon application for advanced swimming-pool filtration orchestration in Home Assistant.
 
+### v0.10.10 — Clear Turbo/MPC and exception language
+
+The manual-decision helper is now explicitly named **Dérogation exceptionnelle
+de chauffe**. Its neutral choice, **Suivre le plan Smart**, clears the temporary
+exception and lets the MPC plan decide. Dashboard text now distinguishes a
+manual Turbo from a Turbo selected by the Smart plan.
+
+### v0.10.9 — Persistent manual heating policy
+
+The optional `input_select.piscine_decision_manuelle` lets you revise the
+decision at any time from Home Assistant: **Plan intelligent**, **Journée
+seulement**, **Autoriser cette nuit** or **Suspendre aujourd'hui**. The choice
+is applied immediately and remains bounded by midnight or the next dawn; it
+does not bypass PAC safety protections.
+
 ### v0.10.8 — Night authorization expires at dawn
 
 Night authorization now ends at the next sunrise (or configured solar-day

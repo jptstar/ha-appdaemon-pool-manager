@@ -7,6 +7,7 @@ pool_manager:
   chauffage_predictif_attributs_max_octets: 14000
   chauffage_predictif_marge_gain: 0.9
   pool_confirmation_enabled: true
+  entity_pool_decision_manual: input_select.piscine_decision_manuelle
   # pool_notify_service: notify.mobile_app_your_phone
 
   # Main sensors

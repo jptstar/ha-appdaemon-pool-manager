@@ -19,6 +19,7 @@ class App(DecisionSupport):
         self.calls = []
         self.states = []
         self.listen_event = lambda *args: None
+        self.listen_state = lambda *args: None
         self._initialize_pool_decisions()
 
     def get_state(self, entity):
@@ -218,6 +219,30 @@ def test_restart_does_not_restore_expired_night_permission():
     }}
     app._initialize_pool_decisions()
     assert app._pool_choice(now) is None
+
+
+def test_permanent_selector_applies_and_can_be_changed_without_prompt():
+    app = App()
+    app._pool_manual_decision_changed(
+        "input_select.piscine_decision_manuelle", None, "Plan intelligent", "Journée seulement", {}
+    )
+    assert app._pool_choice(datetime.datetime.now()) == "eco"
+    assert app.states[-1]["state"] == "Aucune demande"
+
+    app._pool_manual_decision_changed(
+        "input_select.piscine_decision_manuelle", None, "Journée seulement", "Autoriser cette nuit", {}
+    )
+    assert app._pool_choice(datetime.datetime.now()) == "night"
+
+    app._pool_manual_decision_changed(
+        "input_select.piscine_decision_manuelle", None, "Autoriser cette nuit", "Suspendre aujourd'hui", {}
+    )
+    assert app._pool_choice(datetime.datetime.now()) == "skip"
+
+    app._pool_manual_decision_changed(
+        "input_select.piscine_decision_manuelle", None, "Suspendre aujourd'hui", "Suivre le plan Smart", {}
+    )
+    assert app._pool_choice(datetime.datetime.now()) is None
 
 
 def test_quota_forecasts_today_and_rejects_stale_future_or_stopped_plans():

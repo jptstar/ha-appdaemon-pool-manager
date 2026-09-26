@@ -50,6 +50,23 @@ def action(app, choice):
     return next(a for a, c in app._pool_pending["actions"].items() if c == choice)
 
 
+def night_plan():
+    today = datetime.date.today()
+    return {
+        "should_heat": True,
+        "preset": "Smart",
+        "heat_target_c": 30,
+        "night_heating": True,
+        "mpc_plan": [
+            {
+                "date": today,
+                "day_heat_hours": 4,
+                "night_heat_hours": 3,
+            }
+        ],
+    }
+
+
 def test_no_reply_is_smart_and_single_notice():
     app = App()
     assert request(app)["preset"] == "Smart"
@@ -110,6 +127,52 @@ def test_economy_plan_is_recomputed_not_just_relabelled():
     )
     app.daylight = False
     assert not app._apply_pool_decision(plan, 27, 31)["should_heat"]
+
+
+def test_night_prompt_keeps_current_day_preheat_by_default():
+    app = App()
+    result = app._apply_pool_decision(
+        night_plan(),
+        27,
+        31,
+        economy_plan=lambda: {"should_heat": False, "action": "WAIT"},
+    )
+
+    assert result["should_heat"] is True
+    assert result["preset"] == "Smart"
+    assert "préchauffage de jour maintenu" in result["reason"]
+    assert len(app.calls[0][1]["data"]["actions"]) == 4
+    assert action(app, "night")
+
+
+def test_day_only_choice_refuses_night_without_cancelling_day_preheat():
+    app = App()
+    app._apply_pool_decision(night_plan(), 27, 31)
+    app._pool_notification_action(None, {"action": action(app, "eco")}, {})
+
+    app.daylight = True
+    assert app._apply_pool_decision(night_plan(), 27, 31)["should_heat"] is True
+    app.daylight = False
+    assert app._apply_pool_decision(night_plan(), 27, 31)["should_heat"] is False
+
+
+def test_night_authorization_runs_after_dark_and_crosses_midnight():
+    app = App()
+    app._apply_pool_decision(night_plan(), 27, 31)
+    app._pool_notification_action(None, {"action": action(app, "night")}, {})
+    assert app._pool_decision_choice_until > datetime.datetime.now()
+
+    app.daylight = False
+    after_midnight = datetime.datetime.combine(
+        datetime.date.today() + datetime.timedelta(days=1), datetime.time(1)
+    )
+    app._pool_decision_choice_until = after_midnight + datetime.timedelta(hours=6)
+    result = app._apply_pool_decision(
+        night_plan(), 27, 31, now=after_midnight
+    )
+    assert result["should_heat"] is True
+    assert result["decision_choice"] == "night"
+    assert "chauffe nocturne autorisée" in result["reason"]
 
 
 def test_persistent_fallback_and_recovered_plan_invalidates_buttons():

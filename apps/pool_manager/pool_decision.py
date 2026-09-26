@@ -10,6 +10,7 @@ class DecisionSupport:
         self._pool_pending = None
         self._pool_decision_day = None
         self._pool_decision_choice = None
+        self._pool_decision_choice_until = None
         self._pool_notice_key = None
         self._pool_notices = set()
         # Keep an explicit daily choice through AppDaemon/HACS reloads. Old
@@ -23,7 +24,12 @@ class DecisionSupport:
             )
             attrs = previous.get("attributes", {}) if isinstance(previous, dict) else {}
             today = datetime.date.today()
-            if attrs.get("choice_day") == today.isoformat():
+            choice_until = self._parse_pool_datetime(attrs.get("choice_until"))
+            if choice_until and choice_until > datetime.datetime.now():
+                self._pool_decision_day = today
+                self._pool_decision_choice = attrs.get("choice")
+                self._pool_decision_choice_until = choice_until
+            elif attrs.get("choice_day") == today.isoformat():
                 self._pool_decision_day = today
                 self._pool_decision_choice = attrs.get("choice")
             if attrs.get("notice_day") == today.isoformat():
@@ -36,6 +42,36 @@ class DecisionSupport:
             self._pool_notification_action, "mobile_app_notification_action"
         )
 
+    @staticmethod
+    def _parse_pool_datetime(value):
+        try:
+            return datetime.datetime.fromisoformat(str(value)) if value else None
+        except (TypeError, ValueError):
+            return None
+
+    def _pool_choice(self, now):
+        choice = getattr(self, "_pool_decision_choice", None)
+        until = getattr(self, "_pool_decision_choice_until", None)
+        if until is not None:
+            if now < until:
+                return choice
+            self._pool_decision_choice = None
+            self._pool_decision_choice_until = None
+            return None
+        if getattr(self, "_pool_decision_day", None) == now.date():
+            return choice
+        return None
+
+    @staticmethod
+    def _pool_choice_deadline(choice, now):
+        if choice == "night":
+            # Cross midnight and cover the complete exceptional night. The
+            # daylight gate makes this authorization irrelevant after sunrise.
+            return now + datetime.timedelta(hours=18)
+        return datetime.datetime.combine(
+            now.date() + datetime.timedelta(days=1), datetime.time()
+        )
+
     def _publish_pool_decision(self):
         pending = getattr(self, "_pool_pending", None)
         if pending and datetime.datetime.now() >= pending["expires"]:
@@ -46,6 +82,9 @@ class DecisionSupport:
             "choice": getattr(self, "_pool_decision_choice", None),
             "choice_day": self._pool_decision_day.isoformat()
             if self._pool_decision_day
+            else None,
+            "choice_until": self._pool_decision_choice_until.isoformat()
+            if self._pool_decision_choice_until
             else None,
             "notice_day": datetime.date.today().isoformat(),
             "notice_reasons": [
@@ -116,10 +155,12 @@ class DecisionSupport:
                 return
         self._pool_decision_day = now.date()
         self._pool_decision_choice = choice
+        self._pool_decision_choice_until = self._pool_choice_deadline(choice, now)
         self._publish_pool_decision()
         self._pool_notify(
             {
-                "eco": "Économie retenue pour aujourd'hui : Smart de jour.",
+                "eco": "Chauffe de jour maintenue ; chauffe nocturne refusée.",
+                "night": "Chauffe nocturne autorisée pour cette nuit.",
                 "turbo": "Turbo 1 h demandé ; les protections habituelles restent actives.",
                 "skip": "Chauffage prédictif suspendu jusqu'à minuit.",
             }[choice]
@@ -148,11 +189,7 @@ class DecisionSupport:
                 == getattr(self, "chauffage_preset_turbo", "Turbo")
             )
         )
-        choice = (
-            getattr(self, "_pool_decision_choice", None)
-            if getattr(self, "_pool_decision_day", None) == now.date()
-            else None
-        )
+        choice = self._pool_choice(now)
         if not exceptional and choice != "skip":
             self._pool_pending = None
             if hasattr(self, "_pool_notices"):
@@ -172,9 +209,11 @@ class DecisionSupport:
         self._pool_notices = notices
         if choice is None and key not in notices:
             token = uuid.uuid4().hex
-            actions = {
-                f"POOL_{token}_{name}": name for name in ("eco", "turbo", "skip")
-            }
+            choices = ["eco"]
+            if upcoming_night or plan.get("night_heating"):
+                choices.append("night")
+            choices.extend(("turbo", "skip"))
+            actions = {f"POOL_{token}_{name}": name for name in choices}
             self._pool_pending = {
                 "expires": min(
                     now + datetime.timedelta(minutes=30),
@@ -188,15 +227,24 @@ class DecisionSupport:
             self._pool_notice_key = key
             notices.add(key)
             labels = {
-                "eco": "Économie",
-                "turbo": "Turbo 1 h",
+                "eco": "Journée seulement",
+                "night": "Autoriser cette nuit",
+                "turbo": "Turbo 1 h maintenant",
                 "skip": "Suspendre aujourd'hui",
             }
-            message = (
-                f"{reason}. Eau estimée {water:.1f} °C ; cible {target:.1f} °C. "
-                "Turbo 1 h ne garantit pas la cible. Sans réponse : Smart de jour. "
-                "Choix valable 30 minutes. Sans boutons, utiliser le sélecteur Chauffage piscine."
-            )
+            if upcoming_night or plan.get("night_heating"):
+                message = (
+                    f"{reason}. Eau estimée {water:.1f} °C ; cible {target:.1f} °C. "
+                    "Journée seulement maintient le préchauffage avant le coucher du soleil. "
+                    "Autoriser cette nuit prolonge la chauffe nocturne planifiée. "
+                    "Sans réponse : journée seulement. Choix valable 30 minutes."
+                )
+            else:
+                message = (
+                    f"{reason}. Eau estimée {water:.1f} °C ; cible {target:.1f} °C. "
+                    "Turbo 1 h ne garantit pas la cible. Sans réponse : Smart de jour. "
+                    "Choix valable 30 minutes."
+                )
             self._pool_pending["message"] = message
             self._pool_notify(
                 message,
@@ -213,17 +261,30 @@ class DecisionSupport:
                 reason="suspension demandée jusqu'à minuit",
             )
         elif exceptional:
-            if economy_plan is not None:
-                plan = dict(economy_plan())
-                plan["missed_swim_dates"] = sorted(
-                    set(missed + (plan.get("missed_swim_dates") or []))
+            night_exception = upcoming_night or plan.get("night_heating")
+            if night_exception and choice != "night":
+                # Reject only the exceptional night segment. Do not replace the
+                # complete MPC plan: doing so used to discard an already useful
+                # daytime preheat and indirectly let solar arbitration stop the
+                # PAC circulation.
+                plan["preset"] = self.chauffage_preset_smart
+                if not self._predictive_daylight_active():
+                    plan.update(should_heat=False, heat_target_c=None, action="WAIT")
+                plan["reason"] = (
+                    f"{reason}; préchauffage de jour maintenu, chauffe nocturne refusée"
                 )
-            # Default is economy, including after timeout/restart. Explicit
-            # Turbo is handled by the existing one-hour selector/timer.
-            plan["preset"] = self.chauffage_preset_smart
-            if not self._predictive_daylight_active():
-                plan.update(should_heat=False, heat_target_c=None, action="WAIT")
-            plan["reason"] = f"{reason}; économie en attendant confirmation"
+            elif not night_exception:
+                if economy_plan is not None:
+                    plan = dict(economy_plan())
+                    plan["missed_swim_dates"] = sorted(
+                        set(missed + (plan.get("missed_swim_dates") or []))
+                    )
+                plan["preset"] = self.chauffage_preset_smart
+                if not self._predictive_daylight_active():
+                    plan.update(should_heat=False, heat_target_c=None, action="WAIT")
+                plan["reason"] = f"{reason}; économie en attendant confirmation"
+            else:
+                plan["reason"] = f"{reason}; chauffe nocturne autorisée"
         plan["decision_required"] = exceptional and choice is None
         plan["decision_choice"] = choice or "eco"
         self._publish_pool_decision()

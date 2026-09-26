@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.10.7 - Preserve daytime preheat when night heat is declined
+
+- Fix the v0.10.5 confirmation regression that replaced the complete MPC plan and cancelled useful daytime preheating when exceptional night heat was declined.
+- Keep the PAC heat request and its minimum-flow priority active during the remaining daylight window, independently of solar surplus.
+- Add an explicit `Autoriser cette nuit` action whose authorization crosses midnight.
+- Rename the existing economy presentation to `Journée seulement` while preserving the `eco` action attribute and `piscine_decision_economie` script compatibility.
+- Keep `Turbo 1 h maintenant` and `Suspendre aujourd'hui` as separate, explicit choices.
+- Publish clearer confirmation text and a compact Mushroom chip-card example.
+- Add regression coverage for pending, declined and accepted night-heating decisions.
+- See `docs/v0.10.7-RELEASE.md` for behavior and migration.
+
 ## 0.10.6 - Weekday/weekend ready-by policy
 
 - Add optional `chauffage_predictif_heure_baignade_semaine` and `chauffage_predictif_heure_baignade_weekend` deadlines.

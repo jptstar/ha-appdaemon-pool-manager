@@ -1,30 +1,49 @@
 type: conditional
 conditions:
-  - entity: sensor.piscine_decision_chauffage
+  - condition: state
+    entity: sensor.piscine_decision_chauffage
     state: "À confirmer"
 card:
   type: vertical-stack
   cards:
-    - type: markdown
-      content: >-
+    - type: custom:mushroom-template-card
+      entity: sensor.piscine_decision_chauffage
+      primary: Décision chauffage
+      secondary: >-
         {{ state_attr('sensor.piscine_decision_chauffage', 'message') }}
-    - type: horizontal-stack
-      cards:
-        - type: button
-          name: Économie
-          icon: mdi:leaf
+      icon: mdi:message-question
+      icon_color: orange
+      multiline_secondary: true
+      tap_action:
+        action: none
+    - type: custom:mushroom-chips-card
+      alignment: center
+      chips:
+        - type: template
+          content: Journée seulement
+          icon: mdi:white-balance-sunny
+          icon_color: green
           tap_action:
             action: perform-action
             perform_action: script.piscine_decision_economie
-        - type: button
-          name: Turbo 1 h
+        - type: template
+          content: Autoriser cette nuit
+          icon: mdi:weather-night
+          icon_color: indigo
+          tap_action:
+            action: perform-action
+            perform_action: script.piscine_decision_nuit
+        - type: template
+          content: Turbo 1 h
           icon: mdi:fire
+          icon_color: red
           tap_action:
             action: perform-action
             perform_action: script.piscine_decision_turbo
-        - type: button
-          name: Suspendre aujourd'hui
+        - type: template
+          content: Suspendre
           icon: mdi:pause
+          icon_color: amber
           tap_action:
             action: perform-action
             perform_action: script.piscine_decision_suspendre

@@ -2,11 +2,17 @@
 # AppDaemon; do not create a template/helper with the same entity ID.
 script:
   piscine_decision_economie:
-    alias: Piscine - privilégier économie
+    alias: Piscine - journée seulement
     sequence:
       - event: mobile_app_notification_action
         event_data:
           action: "{{ state_attr('sensor.piscine_decision_chauffage', 'eco') or '' }}"
+  piscine_decision_nuit:
+    alias: Piscine - autoriser la chauffe nocturne
+    sequence:
+      - event: mobile_app_notification_action
+        event_data:
+          action: "{{ state_attr('sensor.piscine_decision_chauffage', 'night') or '' }}"
   piscine_decision_turbo:
     alias: Piscine - confirmer Turbo 1 h
     sequence:

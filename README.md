@@ -2,6 +2,17 @@
 
 Pool Manager is an AppDaemon application for advanced swimming-pool filtration orchestration in Home Assistant.
 
+### v0.10.7 — Day preheat preserved and explicit night authorization
+
+Rejecting exceptional night heating no longer cancels a useful daytime
+preheat. The confirmation now distinguishes **daytime only**, **authorize this
+night**, **Turbo 1 h now** and **suspend today**. A night authorization crosses
+midnight, while the normal PAC flow priority continues to protect pump
+circulation from solar-surplus arbitration. Existing entity IDs and the
+historical `piscine_decision_economie` script remain compatible. See
+[release notes](docs/v0.10.7-RELEASE.md) for the corrected behavior and updated
+dashboard scripts.
+
 ### v0.10.6 — Weekday/weekend ready-by policy
 
 Predictive heating can now use different local ready-by hours on weekdays and

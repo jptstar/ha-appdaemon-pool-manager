@@ -2,6 +2,13 @@
 
 Pool Manager is an AppDaemon application for advanced swimming-pool filtration orchestration in Home Assistant.
 
+### v0.10.8 — Night authorization expires at dawn
+
+Night authorization now ends at the next sunrise (or configured solar-day
+start), rather than 18 hours after the response. Expired authorization is not
+restored by an AppDaemon restart. No additional YAML changes are required
+relative to v0.10.7. See [release notes](docs/v0.10.8-RELEASE.md).
+
 ### v0.10.7 — Day preheat preserved and explicit night authorization
 
 Rejecting exceptional night heating no longer cancels a useful daytime

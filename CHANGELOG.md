@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.8 - Bound night authorization to dawn
+
+- Expire night authorization at the next sunrise, including the configured morning margin, instead of an arbitrary 18 hours after confirmation.
+- Fall back to the configured solar-day start (08:00 if unavailable).
+- Do not restore expired authorizations after an AppDaemon restart.
+- Preserve v0.10.7 entity IDs, scripts, daylight preheat and PAC safety priority.
+- Validation: 181 tests passed.
+
 ## 0.10.7 - Preserve daytime preheat when night heat is declined
 
 - Fix the v0.10.5 confirmation regression that replaced the complete MPC plan and cancelled useful daytime preheating when exceptional night heat was declined.

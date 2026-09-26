@@ -186,6 +186,40 @@ def test_persistent_fallback_and_recovered_plan_invalidates_buttons():
     assert not any(s == "input_select/select_option" for s, _ in app.calls)
 
 
+def test_night_deadline_is_next_dawn_not_eighteen_hours():
+    app = App()
+    dawn = datetime.datetime(2026, 9, 27, 7, 30)
+    app.sunrise = lambda: dawn
+    for now in (datetime.datetime(2026, 9, 26, 8),
+                datetime.datetime(2026, 9, 26, 23),
+                datetime.datetime(2026, 9, 27, 1)):
+        assert app._pool_choice_deadline("night", now) == dawn
+
+
+def test_night_deadline_fallback_and_expiration():
+    app = App()
+    app.heure_debut_solaire = "09:00:00"
+    now = datetime.datetime(2026, 9, 26, 10)
+    dawn = datetime.datetime(2026, 9, 27, 9)
+    assert app._pool_choice_deadline("night", now) == dawn
+    assert app._pool_choice_deadline("night", dawn.replace(hour=1)) == dawn
+    app._pool_decision_choice = "night"
+    app._pool_decision_choice_until = dawn
+    assert app._pool_choice(dawn - datetime.timedelta(seconds=1)) == "night"
+    assert app._pool_choice(dawn) is None
+
+
+def test_restart_does_not_restore_expired_night_permission():
+    app = App()
+    now = datetime.datetime.now()
+    app.get_state = lambda *args, **kwargs: {"attributes": {
+        "choice": "night", "choice_day": now.date().isoformat(),
+        "choice_until": (now - datetime.timedelta(minutes=1)).isoformat(),
+    }}
+    app._initialize_pool_decisions()
+    assert app._pool_choice(now) is None
+
+
 def test_quota_forecasts_today_and_rejects_stale_future_or_stopped_plans():
     now = datetime.datetime(2026, 9, 25, 10)
     plan = {

@@ -29,7 +29,7 @@ class DecisionSupport:
                 self._pool_decision_day = today
                 self._pool_decision_choice = attrs.get("choice")
                 self._pool_decision_choice_until = choice_until
-            elif attrs.get("choice_day") == today.isoformat():
+            elif choice_until is None and attrs.get("choice_day") == today.isoformat():
                 self._pool_decision_day = today
                 self._pool_decision_choice = attrs.get("choice")
             if attrs.get("notice_day") == today.isoformat():
@@ -62,12 +62,31 @@ class DecisionSupport:
             return choice
         return None
 
-    @staticmethod
-    def _pool_choice_deadline(choice, now):
+    def _pool_choice_deadline(self, choice, now):
         if choice == "night":
-            # Cross midnight and cover the complete exceptional night. The
-            # daylight gate makes this authorization irrelevant after sunrise.
-            return now + datetime.timedelta(hours=18)
+            # The next dawn closes the current/upcoming night, independent of
+            # the time at which the user answers. AppDaemon returns local time.
+            try:
+                if getattr(self, "suivre_soleil_reel", True):
+                    dawn = self.sunrise()
+                    if isinstance(dawn, datetime.datetime):
+                        if dawn.tzinfo is not None:
+                            dawn = dawn.astimezone().replace(tzinfo=None)
+                        dawn += datetime.timedelta(
+                            minutes=getattr(self, "marge_apres_lever_soleil_min", 0)
+                        )
+                        if dawn > now:
+                            return dawn
+            except Exception:
+                pass
+            try:
+                start = datetime.time.fromisoformat(str(self.heure_debut_solaire))
+            except (AttributeError, TypeError, ValueError):
+                start = datetime.time(8)
+            dawn = datetime.datetime.combine(now.date(), start)
+            if dawn <= now:
+                dawn += datetime.timedelta(days=1)
+            return dawn
         return datetime.datetime.combine(
             now.date() + datetime.timedelta(days=1), datetime.time()
         )

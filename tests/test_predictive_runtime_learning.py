@@ -229,6 +229,46 @@ def test_temperature_certifies_after_full_tempo_eau_at_70(tmp_path):
     assert app.chauffage_predictif_measurement_active is False
 
 
+def test_active_compressor_blocks_certification_and_restarts_full_mixing_clock(tmp_path):
+    app = _make_runtime(tmp_path)
+    app.chauffage_predictif_measurement_active = True
+    app.chauffage_predictif_measurement_purpose = "startup_calibration"
+    app.pac_active = True
+    stops = []
+    app._pac_off = lambda reason, post=True, respect_min_on=False: stops.append(
+        (reason, post, respect_min_on)
+    ) or False
+
+    start = datetime.datetime(2026, 9, 18, 8, 0)
+    app.chauffage_predictif_measurement_started_at = start
+    app.chauffage_predictif_measurement_stable_at = start
+    app.chauffage_predictif_measurement_stable_temp = 25.8
+    app.water = 25.9
+
+    assert app._update_certified_measurement(
+        start + datetime.timedelta(minutes=20)
+    ) is False
+    assert app.chauffage_predictif_certified_water_c is None
+    assert app.chauffage_predictif_measurement_started_at is None
+    assert app.chauffage_predictif_measurement_stable_at is None
+    assert stops[-1][1:] == (False, True)
+
+    # Once compressor power is really low, the hydraulic delay starts again
+    # from zero; the warmed pipe value cannot be certified immediately.
+    app.pac_active = False
+    stopped_at = start + datetime.timedelta(minutes=21)
+    assert app._update_certified_measurement(stopped_at) is False
+    assert app.chauffage_predictif_measurement_started_at == stopped_at
+    app.water = 25.1
+    assert app._update_certified_measurement(
+        stopped_at + datetime.timedelta(minutes=15)
+    ) is False
+    assert app._update_certified_measurement(
+        stopped_at + datetime.timedelta(minutes=17)
+    ) is True
+    assert app.chauffage_predictif_certified_water_c == 25.1
+
+
 def test_speed_above_70_is_preserved_during_calibration(tmp_path):
     app = _make_runtime(tmp_path)
     app.speed = 85

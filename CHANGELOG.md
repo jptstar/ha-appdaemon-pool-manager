@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.11 - Certify pool temperature only with the compressor stopped
+
+- Reject calibration samples while measured PAC power still indicates an active compressor.
+- Request a protected PAC stop without bypassing minimum compressor runtime.
+- Restart the complete hydraulic mixing and probe-stability clocks only after PAC power has physically fallen below the active threshold.
+- Prevent a warmed hydraulic loop from overstating the basin temperature and destabilizing MPC decisions or thermal learning.
+- Preserve all Home Assistant entity IDs, heating modes and v0.10.10 manual-decision behavior.
+- Validation: 183 tests passed.
+
 ## 0.10.10 - Clear MPC Turbo and exception language
 
 - Rename the persistent decision helper to `Dérogation exceptionnelle de chauffe` and its neutral option to `Suivre le plan Smart`.

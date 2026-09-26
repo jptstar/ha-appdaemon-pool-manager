@@ -1187,6 +1187,24 @@ class PredictiveHeatingSupport(DecisionSupport):
         if not self.chauffage_predictif_measurement_active:
             return False
 
+        # A sensor located in the hydraulic loop can read water already warmed
+        # by the heat pump. History-21 showed false certifications 0.8-0.9 °C
+        # above the inlet while the compressor consumed 1.5-2.1 kW. Never use
+        # such a value as the pool reference. Ask for a protected stop, then
+        # restart the complete circulation + stability clocks only after the
+        # compressor power has physically fallen below its active threshold.
+        if self._pac_power_active():
+            self._pac_off(
+                "chauffage prédictif: certification température hors chauffe",
+                post=False,
+                respect_min_on=True,
+            )
+            self.chauffage_predictif_measurement_requested_at = now
+            self.chauffage_predictif_measurement_started_at = None
+            self.chauffage_predictif_measurement_stable_at = None
+            self.chauffage_predictif_measurement_stable_temp = None
+            return False
+
         if getattr(
             self,
             "chauffage_predictif_measurement_requested_at",

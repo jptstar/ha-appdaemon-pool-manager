@@ -2,6 +2,15 @@
 
 Pool Manager is an AppDaemon application for advanced swimming-pool filtration orchestration in Home Assistant.
 
+### v0.10.11 — Reliable basin-temperature calibration
+
+Pool Manager no longer certifies a basin-temperature sample while the PAC
+compressor is active. It requests a protected stop, waits for compressor power
+to fall below the active threshold, then restarts the complete hydraulic mixing
+and probe-stability delays. This prevents locally warmed PAC-loop water from
+inflating the learned pool temperature and making the MPC stop preheating too
+early. Existing Home Assistant entities and YAML choices remain compatible.
+
 ### v0.10.10 — Clear Turbo/MPC and exception language
 
 The manual-decision helper is now explicitly named **Dérogation exceptionnelle

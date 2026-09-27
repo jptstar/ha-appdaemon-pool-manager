@@ -2,6 +2,12 @@
 
 Pool Manager is an AppDaemon application for advanced swimming-pool filtration orchestration in Home Assistant.
 
+### v0.10.13 — Clear MPC journal and PAC card
+
+The journal now records actual MPC strategy changes, not a separate event for
+every tiny trajectory adjustment. The Mushroom PAC card also follows the
+physical heat/cool state and uses the supported icon-color property.
+
 ### v0.10.12 — Reliable same-day recovery and night authorization
 
 A selected bathing day is no longer abandoned as soon as its preferred

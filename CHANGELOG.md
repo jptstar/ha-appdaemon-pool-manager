@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.13 - Journal MPC lisible et carte PAC cohérente
+
+- Do not add a journal event when only the MPC trajectory target changes by a small amount; action, preset, night policy, bathing target and recovery date remain journalled.
+- Keep the Mushroom heating card aligned with the PAC's physical heating/cooling state and use its supported `icon_color` field.
+- Validation: 191 tests passed.
+
 ## 0.10.12 - Keep committed bathing recovery and night permission effective
 
 - Continue a missed same-day bathing target as a bounded daylight recovery instead of immediately moving the dashboard to a later date.

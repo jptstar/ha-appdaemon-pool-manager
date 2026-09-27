@@ -176,6 +176,100 @@ def test_night_authorization_runs_after_dark_and_crosses_midnight():
     assert "chauffe nocturne autorisée" in result["reason"]
 
 
+def test_night_authorization_survives_midnight_horizon_rollover():
+    app = App()
+    app.daylight = False
+    app.chauffage_predictif_marge_arret_c = 0.2
+    after_midnight = datetime.datetime.combine(
+        datetime.date.today() + datetime.timedelta(days=1), datetime.time(1)
+    )
+    app._pool_decision_choice = "night"
+    app._pool_decision_choice_until = after_midnight + datetime.timedelta(hours=6)
+    missed_plan = {
+        "should_heat": False,
+        "action": "WAIT",
+        "preset": "Smart",
+        "missed_swim_dates": [after_midnight.date()],
+        "swim_dates": [after_midnight.date() + datetime.timedelta(days=1)],
+        "candidate": {"date": after_midnight.date() + datetime.timedelta(days=1)},
+        "opportunities": [{"date": after_midnight.date(), "score": 63}],
+    }
+
+    result = app._apply_pool_decision(
+        missed_plan,
+        29.4,
+        31.0,
+        now=after_midnight,
+        economy_plan=lambda: missed_plan,
+    )
+
+    assert result["should_heat"] is True
+    assert result["preset"] == "Turbo"
+    assert result["heat_target_c"] == 31.0
+    assert result["night_heating"] is True
+    assert result["candidate"]["date"] == after_midnight.date()
+    assert after_midnight.date() not in result["missed_swim_dates"]
+    assert "jusqu'au lever du soleil" in result["reason"]
+
+
+def test_missed_same_day_target_keeps_best_effort_daylight_recovery():
+    app = App()
+    app.daylight = True
+    app.chauffage_predictif_marge_arret_c = 0.2
+    now = datetime.datetime.now()
+    plan = {
+        "should_heat": False,
+        "action": "WAIT",
+        "preset": "Smart",
+        "missed_swim_dates": [now.date()],
+        "swim_dates": [now.date() + datetime.timedelta(days=2)],
+        "candidate": {"date": now.date() + datetime.timedelta(days=2)},
+        "opportunities": [{"date": now.date(), "score": 63}],
+    }
+
+    result = app._apply_pool_decision(plan, 28.6, 31.0, now=now)
+
+    assert result["should_heat"] is True
+    assert result["preset"] == "Turbo"
+    assert result["candidate"]["date"] == now.date()
+    assert now.date() in result["swim_dates"]
+    assert "rattrapage de jour" in result["reason"]
+    assert result["decision_required"] is False
+    assert app.calls == []
+
+
+def test_missed_same_day_target_offers_night_authorization_after_dark():
+    app = App()
+    app.daylight = False
+    app.chauffage_predictif_marge_arret_c = 0.2
+    now = datetime.datetime.now()
+    plan = {
+        "should_heat": False,
+        "action": "WAIT",
+        "preset": "Smart",
+        "missed_swim_dates": [now.date()],
+    }
+
+    result = app._apply_pool_decision(plan, 28.6, 31.0, now=now)
+
+    assert result["should_heat"] is False
+    assert action(app, "night")
+
+
+def test_night_authorization_stops_when_target_is_reached():
+    app = App()
+    app.daylight = False
+    app.chauffage_predictif_marge_arret_c = 0.2
+    now = datetime.datetime.now()
+    app._pool_decision_choice = "night"
+    app._pool_decision_choice_until = now + datetime.timedelta(hours=6)
+    plan = {"should_heat": False, "action": "WAIT"}
+
+    result = app._apply_pool_decision(plan, 30.9, 31.0, now=now)
+
+    assert result["should_heat"] is False
+
+
 def test_persistent_fallback_and_recovered_plan_invalidates_buttons():
     app = App()
     app.args = {}

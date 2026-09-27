@@ -477,9 +477,9 @@ class PredictiveHeatingSupport(DecisionSupport):
             "entity_pac_ambient_temperature"
         )
 
-        # Legacy measurement settings are still parsed for configuration
-        # compatibility. Since the passive-sampling change, certification uses
-        # the shared pump-start stabilization (tempo_eau) and never owns speed.
+        # Certification uses the stricter of the general hydraulic delay and
+        # its own minimum mixing delay. A helper accidentally left at zero must
+        # never turn a locally warmed PAC-loop value into a basin reference.
         self.chauffage_predictif_mesure_vitesse_pct = max(
             47,
             min(
@@ -899,13 +899,17 @@ class PredictiveHeatingSupport(DecisionSupport):
         return True
 
     def _measurement_tempo_eau_s(self):
+        minimum = max(
+            300,
+            int(getattr(self, "chauffage_predictif_mesure_tempo_s", 900)),
+        )
         try:
             return max(
-                0,
+                minimum,
                 int(float(self.get_state(self.args["tempo_eau"]))),
             )
         except Exception:
-            return 0
+            return minimum
 
     def _measurement_retry_blocked(self, now=None):
         failed_at = getattr(

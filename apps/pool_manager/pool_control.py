@@ -319,7 +319,7 @@ class ControlMixin:
 
             if reste_temps_eq <= 0:
                 # Si le quota est atteint mais que la PAC a encore besoin de chauffer, elle garde la priorité.
-                if self.pac_prioritaire_absolue and pac_besoin:
+                if self.pac_prioritaire_absolue and (pac_besoin or pac_chauffe):
                     if self.appliquer_priorite_pac_ou_quota(
                         filtre_temps_eq,
                         objectif_temps_eq,

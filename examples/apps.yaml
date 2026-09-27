@@ -111,6 +111,7 @@ pool_manager:
   # the pipe probe must stay stable for 120 s within 0.15 °C. Normal energy
   # arbitration cannot stop an active calibration; safety/forced stop still can.
   chauffage_predictif_mesure_vitesse_pct: 70
+  chauffage_predictif_mesure_tempo_s: 900
   chauffage_predictif_mesure_stabilite_s: 120
   chauffage_predictif_mesure_variation_max_c: 0.15
   chauffage_predictif_mesure_fraiche_s: 21600

@@ -272,7 +272,10 @@ class StrategyMixin:
         vitesse_quota = etat_quota["vitesse"]
         vitesse_quota_requise = etat_quota["vitesse_requise"]
 
-        if self.pac_prioritaire_absolue and pac_besoin:
+        # Physical compressor activity is itself a circulation requirement.
+        # This closes the short gap seen when a mode/plan transition clears the
+        # logical request before PAC power has actually fallen.
+        if self.pac_prioritaire_absolue and (pac_besoin or pac_chauffe):
             self.debut_manque_soleil = None
             self.reset_stabilite_surplus()
             self.reset_pid()

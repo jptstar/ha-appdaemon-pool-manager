@@ -145,3 +145,21 @@ def test_pac_still_starts_at_minimum_before_heat_pump_can_run():
 
     assert handled is True
     assert strategy.started == (47, "pac_prioritaire")
+
+
+def test_physical_pac_activity_keeps_minimum_flow_during_request_transition():
+    strategy = FakeStrategy(remaining_h=7.17, in_solar_window=False)
+
+    handled = strategy.appliquer_priorite_pac_ou_quota(
+        filtre_temps_eq=14.0,
+        objectif_temps_eq=14.0,
+        pompe_on=True,
+        pac_besoin=False,
+        pac_chauffe=True,
+        etat_pac="turbo",
+        surplus_net=0,
+        reseau_net=2200,
+    )
+
+    assert handled is True
+    assert strategy.speed == 47

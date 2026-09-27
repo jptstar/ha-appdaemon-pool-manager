@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.12 - Keep committed bathing recovery and night permission effective
+
+- Continue a missed same-day bathing target as a bounded daylight recovery instead of immediately moving the dashboard to a later date.
+- Make `Autoriser cette nuit` an effective instruction through midnight: heat continues until dawn or until the target is reached, even when the MPC horizon rolls to a new day.
+- Keep minimum pump circulation whenever the compressor is physically active, including short plan or mode transitions.
+- Enforce the dedicated calibration mixing minimum even when the general Home Assistant circulation helper is zero.
+- Preserve all existing Home Assistant entity IDs and safety gates.
+- Validation: 189 tests passed.
+
 ## 0.10.11 - Certify pool temperature only with the compressor stopped
 
 - Reject calibration samples while measured PAC power still indicates an active compressor.

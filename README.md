@@ -2,6 +2,16 @@
 
 Pool Manager is an AppDaemon application for advanced swimming-pool filtration orchestration in Home Assistant.
 
+### v0.10.12 — Reliable same-day recovery and night authorization
+
+A selected bathing day is no longer abandoned as soon as its preferred
+ready-by hour is missed. Pool Manager continues a bounded daylight recovery,
+then asks before using the night. When **Autoriser cette nuit** is selected,
+the instruction now remains effective across midnight until dawn or until the
+temperature target is reached. Physical compressor activity also keeps minimum
+pump flow, and certified calibration always waits at least the configured
+15-minute hydraulic mixing delay.
+
 ### v0.10.11 — Reliable basin-temperature calibration
 
 Pool Manager no longer certifies a basin-temperature sample while the PAC

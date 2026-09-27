@@ -167,6 +167,7 @@ pool_manager:
   # A real pump stop cancels the measurement and the next attempt restarts from
   # zero. Ordinary solar/grid arbitration cannot interrupt an active calibration.
   chauffage_predictif_mesure_vitesse_pct: 70
+  chauffage_predictif_mesure_tempo_s: 900
   chauffage_predictif_mesure_stabilite_s: 120
   chauffage_predictif_mesure_variation_max_c: 0.15
   chauffage_predictif_mesure_fraiche_s: 21600

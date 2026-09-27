@@ -229,6 +229,22 @@ def test_temperature_certifies_after_full_tempo_eau_at_70(tmp_path):
     assert app.chauffage_predictif_measurement_active is False
 
 
+def test_certification_keeps_internal_mixing_minimum_when_helper_is_zero(tmp_path):
+    app = _make_runtime(tmp_path)
+    app.get_state = lambda entity, attribute=None: 0
+
+    assert app._measurement_tempo_eau_s() == 900
+
+    app.chauffage_predictif_measurement_active = True
+    app.chauffage_predictif_measurement_purpose = "startup_calibration"
+    start = datetime.datetime(2026, 9, 18, 8, 0)
+    assert app._update_certified_measurement(start) is False
+    assert app._update_certified_measurement(
+        start + datetime.timedelta(minutes=2)
+    ) is False
+    assert app.chauffage_predictif_certified_water_c is None
+
+
 def test_active_compressor_blocks_certification_and_restarts_full_mixing_clock(tmp_path):
     app = _make_runtime(tmp_path)
     app.chauffage_predictif_measurement_active = True

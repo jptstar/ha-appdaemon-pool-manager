@@ -251,6 +251,16 @@ class DecisionSupport:
             return plan
         plan = dict(plan)
         missed = plan.get("missed_swim_dates") or []
+        daylight = self._predictive_daylight_active()
+        same_day_missed = now.date() in missed
+        stop_margin = max(
+            0.0,
+            float(getattr(self, "chauffage_predictif_marge_arret_c", 0.2)),
+        )
+        same_day_recovery_needed = bool(
+            same_day_missed and float(water) < float(target) - stop_margin
+        )
+        future_missed = [item for item in missed if item != now.date()]
         upcoming_night = any(
             now.date() <= row["date"] <= now.date() + datetime.timedelta(days=1)
             and float(row.get("night_heat_hours") or 0) > 0
@@ -258,7 +268,8 @@ class DecisionSupport:
             if isinstance(row.get("date"), datetime.date)
         )
         exceptional = bool(
-            missed
+            future_missed
+            or (same_day_recovery_needed and not daylight)
             or upcoming_night
             or plan.get("night_heating")
             or (
@@ -268,13 +279,25 @@ class DecisionSupport:
             )
         )
         choice = self._pool_choice(now)
-        if not exceptional and choice != "skip":
+        authorized_night_heat = bool(
+            choice == "night"
+            and not daylight
+            and float(water) < float(target) - stop_margin
+        )
+        if (
+            not exceptional
+            and choice != "skip"
+            and not authorized_night_heat
+            and not (same_day_recovery_needed and daylight)
+        ):
             self._pool_pending = None
             if hasattr(self, "_pool_notices"):
                 self._publish_pool_decision()
             return plan
         reason = (
-            "Objectif baignade inaccessible selon le modèle"
+            "Objectif baignade aujourd'hui en retard"
+            if same_day_recovery_needed
+            else "Objectif baignade inaccessible selon le modèle"
             if missed
             else "Chauffe nocturne proposée"
             if upcoming_night or plan.get("night_heating")
@@ -285,10 +308,15 @@ class DecisionSupport:
             k for k in getattr(self, "_pool_notices", set()) if k[0] == now.date()
         }
         self._pool_notices = notices
-        if choice is None and key not in notices:
+        if exceptional and choice is None and key not in notices:
             token = uuid.uuid4().hex
             choices = ["eco"]
-            if upcoming_night or plan.get("night_heating"):
+            night_exception = bool(
+                upcoming_night
+                or plan.get("night_heating")
+                or (same_day_missed and not daylight)
+            )
+            if night_exception:
                 choices.append("night")
             choices.extend(("turbo", "skip"))
             actions = {f"POOL_{token}_{name}": name for name in choices}
@@ -310,7 +338,7 @@ class DecisionSupport:
                 "turbo": "Turbo 1 h maintenant",
                 "skip": "Suspendre aujourd'hui",
             }
-            if upcoming_night or plan.get("night_heating"):
+            if night_exception:
                 message = (
                     f"{reason}. Eau estimée {water:.1f} °C ; cible {target:.1f} °C. "
                     "Journée seulement maintient le préchauffage avant le coucher du soleil. "
@@ -338,15 +366,80 @@ class DecisionSupport:
                 action="WAIT",
                 reason="suspension demandée jusqu'à minuit",
             )
+        elif same_day_recovery_needed and daylight:
+            # Missing the preferred ready-by hour must not immediately abandon
+            # today's usable bathing window and jump the dashboard to a later
+            # date. Continue a bounded best-effort recovery during daylight;
+            # any continuation after dark still requires explicit permission.
+            today = now.date()
+            opportunities = list(plan.get("opportunities") or [])
+            candidate = next(
+                (
+                    item
+                    for item in opportunities
+                    if isinstance(item, dict) and item.get("date") == today
+                ),
+                {"date": today},
+            )
+            plan.update(
+                should_heat=True,
+                heat_target_c=float(target),
+                trajectory_target_c=float(target),
+                action="PREHEAT",
+                preset=getattr(self, "chauffage_preset_turbo", "Turbo"),
+                candidate=candidate,
+                reason="objectif baignade aujourd'hui en retard; rattrapage de jour",
+            )
+            plan["missed_swim_dates"] = [
+                item for item in missed if item != today
+            ]
+            plan["swim_dates"] = sorted(
+                set((plan.get("swim_dates") or []) + [today])
+            )
+        elif authorized_night_heat:
+            # A night authorization is an explicit, bounded instruction, not
+            # merely permission for a segment that must survive every MPC
+            # replan. At midnight the horizon changes day and used to discard
+            # the current pre-dawn segment, making the still-valid choice a
+            # no-op. Continue toward the agreed target until dawn or until the
+            # target is reached; normal PAC safety gates remain authoritative.
+            today = now.date()
+            opportunities = list(plan.get("opportunities") or [])
+            candidate = next(
+                (
+                    item
+                    for item in opportunities
+                    if isinstance(item, dict) and item.get("date") == today
+                ),
+                {"date": today},
+            )
+            plan.update(
+                should_heat=True,
+                heat_target_c=float(target),
+                trajectory_target_c=float(target),
+                action="PREHEAT",
+                preset=getattr(self, "chauffage_preset_turbo", "Turbo"),
+                night_heating=True,
+                candidate=candidate,
+                reason="chauffe nocturne autorisée jusqu'au lever du soleil",
+            )
+            plan["missed_swim_dates"] = [
+                item for item in missed if item != today
+            ]
+            plan["swim_dates"] = sorted(set((plan.get("swim_dates") or []) + [today]))
         elif exceptional:
-            night_exception = upcoming_night or plan.get("night_heating")
+            night_exception = bool(
+                upcoming_night
+                or plan.get("night_heating")
+                or (same_day_missed and not daylight)
+            )
             if night_exception and choice != "night":
                 # Reject only the exceptional night segment. Do not replace the
                 # complete MPC plan: doing so used to discard an already useful
                 # daytime preheat and indirectly let solar arbitration stop the
                 # PAC circulation.
                 plan["preset"] = self.chauffage_preset_smart
-                if not self._predictive_daylight_active():
+                if not daylight:
                     plan.update(should_heat=False, heat_target_c=None, action="WAIT")
                 plan["reason"] = (
                     f"{reason}; préchauffage de jour maintenu, chauffe nocturne refusée"
@@ -358,7 +451,7 @@ class DecisionSupport:
                         set(missed + (plan.get("missed_swim_dates") or []))
                     )
                 plan["preset"] = self.chauffage_preset_smart
-                if not self._predictive_daylight_active():
+                if not daylight:
                     plan.update(should_heat=False, heat_target_c=None, action="WAIT")
                 plan["reason"] = f"{reason}; économie en attendant confirmation"
             else:

@@ -2,6 +2,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 
 MODULE_PATH = Path(__file__).parents[1] / "apps" / "pool_manager" / "pool_heating.py"
 sys.path.insert(0, str(MODULE_PATH.parent))
@@ -51,6 +53,20 @@ def test_heating_mode_set_contains_every_supported_option():
     assert module.CHAUFFAGE_FIN_SAISON in module.CHAUFFAGE_MODES
     assert set(module.TURBO_DURATIONS_H).issubset(module.CHAUFFAGE_MODES)
 
+
+def test_manual_decision_expiry_is_checked_even_before_turbo_management():
+    app = object.__new__(module.HeatingModeMixin)
+    app.entity_chauffage = "input_select.piscine_chauffage"
+    calls = []
+    app._pool_choice = lambda now: calls.append(now)
+    app._update_predictive_learning = lambda: (_ for _ in ()).throw(RuntimeError("stop"))
+
+    with pytest.raises(RuntimeError, match="stop"):
+        app._manage_pac_auto()
+
+    assert len(calls) == 1
+
+
 def test_leaving_forced_turbo_releases_physical_preset_immediately():
     app = object.__new__(module.HeatingModeMixin)
     app.chauffage_predictif = True
@@ -79,4 +95,3 @@ def test_leaving_forced_turbo_releases_physical_preset_immediately():
     assert ("cancel_turbo",) in calls
     assert ("preset", "Smart") in calls
     assert ("safety_tick",) in calls
-

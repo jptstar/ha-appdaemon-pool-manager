@@ -95,6 +95,7 @@ class SafetyMixin:
         self.pac_compressor_started_at = None
         self.pac_last_stop_at = None
         self.pac_deferred_stop_reason = None
+        self.pac_deferred_stop_log_reason = None
         self.pac_deferred_start_label = None
         self.pac_post_circulation_until = None
         self.pac_post_circulation_low_since = None
@@ -331,12 +332,14 @@ class SafetyMixin:
         self.pac_last_start_at = datetime.datetime.now()
         self.pac_compressor_started_at = None
         self.pac_deferred_stop_reason = None
+        self.pac_deferred_stop_log_reason = None
         self.pac_deferred_start_label = None
 
     def _pac_mark_stopped(self):
         self.pac_last_stop_at = datetime.datetime.now()
         self.pac_compressor_started_at = None
         self.pac_deferred_stop_reason = None
+        self.pac_deferred_stop_log_reason = None
 
     def _pac_min_on_remaining_s(self):
         started_at = getattr(self, "pac_compressor_started_at", None)
@@ -503,8 +506,13 @@ class SafetyMixin:
                 self.pac_compressor_started_at = datetime.datetime.now()
             remaining = self._pac_min_on_remaining_s()
             if remaining > 0:
-                if self.pac_deferred_stop_reason != reason:
-                    self.pac_deferred_stop_reason = reason
+                self.pac_deferred_stop_reason = reason
+                # Heat-policy refreshes may clear the pending-stop flag while
+                # the same physical compressor cycle is still running. Keep a
+                # separate journal latch so the countdown is announced once,
+                # not at every control tick.
+                if getattr(self, "pac_deferred_stop_log_reason", None) != reason:
+                    self.pac_deferred_stop_log_reason = reason
                     self.log(
                         f"PAC: arrêt différé {remaining}s, anti-cycle ({reason})",
                         log="piscine_log",

@@ -1141,6 +1141,21 @@ class PredictiveHeatingSupport(DecisionSupport):
     def _update_certified_measurement(self, now=None):
         now = now or datetime.datetime.now()
 
+        # A user-selected Turbo is an explicit uninterrupted heat request.
+        # Never arm (or continue) a pump-only certification while it is active:
+        # the sample would be thermally biased and stopping the compressor for
+        # it defeats the purpose of Turbo. A fresh calibration is requested
+        # after returning to a predictive Smart mode.
+        try:
+            mode_reader = getattr(self, "chauffage_mode", None)
+            heating_mode = str(mode_reader() if callable(mode_reader) else "").strip()
+        except Exception:
+            heating_mode = ""
+        if heating_mode.startswith("Turbo"):
+            if self.chauffage_predictif_measurement_active:
+                self._reset_measurement_tracker()
+            return False
+
         if not self.pompe_est_on():
             if self.chauffage_predictif_measurement_active:
                 self._interrupt_predictive_measurement("pompe arrêtée")

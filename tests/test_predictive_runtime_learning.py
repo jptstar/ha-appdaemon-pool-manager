@@ -471,6 +471,20 @@ def test_failed_morning_measurement_still_blocks_heating_until_retry(tmp_path):
     assert app._measurement_required_before_action({"should_heat": True}) is True
 
 
+def test_forced_turbo_never_starts_or_continues_certification(tmp_path):
+    app = _make_runtime(tmp_path)
+    app.chauffage_mode = lambda: "Turbo • 12 h"
+    app.chauffage_predictif_measurement_active = True
+    app.chauffage_predictif_measurement_purpose = "startup_calibration"
+    app.pac_active = True
+    stop_calls = []
+    app._pac_off = lambda *args, **kwargs: stop_calls.append((args, kwargs))
+
+    assert app._update_certified_measurement(datetime.datetime.now()) is False
+    assert app.chauffage_predictif_measurement_active is False
+    assert stop_calls == []
+
+
 def test_heating_learning_uses_mixed_post_heat_measurement(tmp_path):
     app = _make_runtime(tmp_path)
     app._predictive_daylight_active = lambda: True

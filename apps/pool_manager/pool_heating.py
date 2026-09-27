@@ -451,6 +451,13 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         if not self.entity_chauffage:
             return self._manage_pac_saisonnier()
 
+        # Expire a bounded manual policy independently from the active heating
+        # selector. Previously this happened only inside a Smart/MPC replan, so
+        # an overnight choice could remain displayed throughout a long Turbo.
+        pool_choice = getattr(self, "_pool_choice", None)
+        if callable(pool_choice):
+            pool_choice(datetime.datetime.now())
+
         self._update_predictive_learning()
         mode_chauffage = self.chauffage_mode()
         kind = chauffage_mode_kind(mode_chauffage)

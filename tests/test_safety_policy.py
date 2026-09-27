@@ -140,6 +140,7 @@ def make_pac_cycle_app(state="heat"):
     app.pac_compressor_started_at = None
     app.pac_last_stop_at = None
     app.pac_deferred_stop_reason = None
+    app.pac_deferred_stop_log_reason = None
     app.pac_deferred_start_label = None
     app.pac_auto_start_pending = False
     app.pac_auto_start_deadline = None
@@ -165,6 +166,20 @@ def test_predictive_stop_is_deferred_until_minimum_compressor_runtime():
     assert app.services == []
     assert app.pac_deferred_stop_reason == "chauffage prédictif: attente"
     assert app._pac_circulation_securite_requise() is True
+
+
+def test_deferred_stop_countdown_is_logged_once_per_compressor_cycle():
+    app = make_pac_cycle_app("heat")
+    app.pac_compressor_started_at = datetime.datetime.now() - datetime.timedelta(seconds=60)
+    messages = []
+    app.log = lambda message, **kwargs: messages.append(message)
+
+    assert app._pac_off("certification température hors chauffe", respect_min_on=True) is False
+    # Simulate a repeated heat-policy refresh clearing the operational flag.
+    app.pac_deferred_stop_reason = None
+    assert app._pac_off("certification température hors chauffe", respect_min_on=True) is False
+
+    assert len(messages) == 1
 
 
 def test_predictive_stop_runs_after_minimum_compressor_runtime():

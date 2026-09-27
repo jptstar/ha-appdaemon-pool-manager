@@ -2307,7 +2307,6 @@ class PredictiveHeatingSupport(DecisionSupport):
             bool((plan or {}).get("night_heating")),
             candidate.get("date"),
             (plan or {}).get("recovery_start_date"),
-            round(float((plan or {}).get("trajectory_target_c") or 0.0), 1),
             swim_dates,
         )
         if signature == self.chauffage_predictif_last_log_signature:

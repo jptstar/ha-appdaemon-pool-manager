@@ -93,6 +93,29 @@ def _make_runtime(tmp_path):
     return app
 
 
+def test_predictive_plan_journal_ignores_trajectory_micro_adjustments(tmp_path):
+    app = _make_runtime(tmp_path)
+    app.chauffage_predictif_last_log_signature = None
+    messages = []
+    app.log = lambda message, **kwargs: messages.append((message, kwargs))
+    today = datetime.date(2026, 9, 27)
+    plan = {
+        "action": "PREHEAT",
+        "preset": "Smart",
+        "night_heating": False,
+        "candidate": {"date": today},
+        "recovery_start_date": today,
+        "swim_dates": [today],
+        "trajectory_target_c": 28.8,
+    }
+
+    app._log_predictive_plan(plan, 27.1, 31.0, "end_season")
+    plan["trajectory_target_c"] = 28.9
+    app._log_predictive_plan(plan, 27.1, 31.0, "end_season")
+
+    assert len(messages) == 1
+
+
 def test_predictive_attribute_payload_is_bounded_and_keeps_dashboard_fields():
     verbose = "détail" * 1000
     attributes = {

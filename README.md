@@ -2,6 +2,13 @@
 
 Pool Manager is an AppDaemon application for advanced swimming-pool filtration orchestration in Home Assistant.
 
+### v0.10.14 — Uninterrupted Turbo heating
+
+An explicit Turbo is no longer interrupted by predictive temperature
+calibration. The anti-cycle protection remains active but reports only one
+journal entry per physical compressor cycle. Expired manual choices now return
+to Smart even while a Turbo is running.
+
 ### v0.10.13 — Clear MPC journal and PAC card
 
 The journal now records actual MPC strategy changes, not a separate event for

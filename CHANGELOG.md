@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.14 - Turbo uninterrupted and anti-cycle journal deduplicated
+
+- Never arm or continue a certified-temperature calibration during an explicit Turbo heating request.
+- Expire bounded manual heating choices even while Turbo is active, so the Home Assistant selector returns to Smart at its deadline.
+- Log a protected anti-cycle stop once per physical compressor cycle instead of at every control tick.
+- Validation: 194 tests passed.
+
 ## 0.10.13 - Journal MPC lisible et carte PAC cohérente
 
 - Do not add a journal event when only the MPC trajectory target changes by a small amount; action, preset, night policy, bathing target and recovery date remain journalled.

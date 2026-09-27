@@ -11,6 +11,8 @@ the instruction now remains effective across midnight until dawn or until the
 temperature target is reached. Physical compressor activity also keeps minimum
 pump flow, and certified calibration always waits at least the configured
 15-minute hydraulic mixing delay.
+The pool journal also records each operating-mode change, without adding a
+duplicate entry at every control loop.
 
 ### v0.10.11 — Reliable basin-temperature calibration
 

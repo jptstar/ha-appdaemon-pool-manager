@@ -5,6 +5,7 @@ import datetime
 from datetime import timedelta
 
 from pool_common import *
+from pool_journal import pool_operating_mode_transition
 
 class LifecycleMixin:
 
@@ -288,6 +289,20 @@ class LifecycleMixin:
             self.traitement(kwargs)
 
     def change_mode(self, entity, attribute, old, new, kwargs):
+        old_mode = str(old or "").strip()
+        new_mode = str(new or "").strip()
+        # State listeners run only on changes, but retain the guard so an HA
+        # reload or an integration echo cannot flood the persistent journal.
+        if new_mode and old_mode != new_mode:
+            try:
+                self.log(
+                    pool_operating_mode_transition(old_mode, new_mode),
+                    log="piscine_log",
+                )
+            except Exception:
+                # Journal publication must never prevent a safety-mode change.
+                pass
+
         self.fin_tempo = 0
         self.mode_speed_initialized = False
         self.cancel_pending_start_sequence()
@@ -315,11 +330,11 @@ class LifecycleMixin:
             self.handle_bras = None
             self.prochain_bras = None
 
-        if new.strip() == TAB_MODE[2]:
+        if new_mode == TAB_MODE[2]:
             if not ("arret_force" in self.args and self.get_state(self.args["arret_force"]) == "on"):
                 self.planifier_bras(0)
 
-        self.sync_local_panel_policy(new.strip())
+        self.sync_local_panel_policy(new_mode)
         self.traitement(kwargs)
 
     def change_coef(self, entity, attribute, old, new, kwargs):

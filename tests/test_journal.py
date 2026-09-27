@@ -7,7 +7,12 @@ from types import SimpleNamespace
 MODULE_DIR = Path(__file__).parents[1] / "apps" / "pool_manager"
 sys.path.insert(0, str(MODULE_DIR))
 
-from pool_journal import journal_category, journal_french, publish_journal_event
+from pool_journal import (
+    journal_category,
+    journal_french,
+    pool_operating_mode_transition,
+    publish_journal_event,
+)
 
 
 def test_journal_normalization_stays_out_of_control_policy():
@@ -24,6 +29,15 @@ def test_cover_transition_tokens_are_translated_before_open_substrings():
     )
     assert journal_french("Volet piscine: open -> closing") == (
         "Volet piscine: ouvert → en fermeture"
+    )
+
+
+def test_pool_operating_mode_transitions_are_clear_and_separate_from_safety_events():
+    message = pool_operating_mode_transition("Intelligent", "Hors Gel")
+    assert message == "Mode piscine : Intelligent → Hors gel"
+    assert journal_category(message) == "MODE"
+    assert pool_operating_mode_transition("Marche Forcée", "Arrêt Forcé") == (
+        "Mode piscine : Marche forcée → Arrêt forcé"
     )
 
 

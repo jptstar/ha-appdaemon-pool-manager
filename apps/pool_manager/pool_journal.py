@@ -6,9 +6,33 @@
 import datetime
 
 
+POOL_OPERATING_MODE_LABELS = {
+    "Température": "Température",
+    "Intelligent": "Intelligent",
+    "Hors Gel": "Hors gel",
+    "Marche Forcée": "Marche forcée",
+    "Arrêt Forcé": "Arrêt forcé",
+}
+
+
+def pool_operating_mode_label(value):
+    """Return the dashboard label for a configured pool operating mode."""
+    text = str(value or "").strip()
+    return POOL_OPERATING_MODE_LABELS.get(text, text or "inconnu")
+
+
+def pool_operating_mode_transition(old, new):
+    """Format a concise, journal-safe operating-mode transition."""
+    return (
+        "Mode piscine : "
+        f"{pool_operating_mode_label(old)} → {pool_operating_mode_label(new)}"
+    )
+
+
 def journal_category(message):
     text = str(message or "").casefold()
     categories = (
+        ("MODE", ("mode piscine", "mode fonctionnement piscine")),
         ("SÉCURITÉ", ("sécurité", "securite", "hors gel", "fail-safe", "⚠", "erreur", "fault")),
         ("APPRENTISSAGE", ("apprentissage", "pertes nuit", "°c/h")),
         ("ÉLECTROLYSE", ("électrolys", "electrolys")),

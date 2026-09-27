@@ -6,6 +6,7 @@
 - Make `Autoriser cette nuit` an effective instruction through midnight: heat continues until dawn or until the target is reached, even when the MPC horizon rolls to a new day.
 - Keep minimum pump circulation whenever the compressor is physically active, including short plan or mode transitions.
 - Enforce the dedicated calibration mixing minimum even when the general Home Assistant circulation helper is zero.
+- Record each pool operating-mode transition in the Home Assistant journal: Intelligent, Hors gel, Marche forcée, Arrêt forcé or Température.
 - Preserve all existing Home Assistant entity IDs and safety gates.
 - Validation: 189 tests passed.
 

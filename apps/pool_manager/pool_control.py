@@ -118,6 +118,7 @@ class ControlMixin:
                 restant_txt = f" • reste {mm:02d}:{ss:02d}"
 
             phase_txt = {
+                "waiting_pac_stop": "attente arrêt PAC",
                 "raising_flow": "mise en circulation",
                 "circulating": "brassage",
                 "stability": "stabilité sonde",

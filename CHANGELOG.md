@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.15 - Distinguish PAC anti-cycle wait from hydraulic flow wait
+
+- Report a dedicated `waiting_pac_stop` certification phase while the compressor is still physically active and its protected stop is deferred by the minimum-on anti-cycle timer.
+- Show `attente arrêt PAC` in the Home Assistant filtration detail instead of the misleading `mise en circulation` / flow-wait state when pump circulation is already confirmed.
+- Preserve the original certified-measurement request timestamp while waiting for the PAC to stop instead of resetting it at every control tick.
+- Keep the full circulation and probe-stability clocks starting only after PAC power has actually fallen below the active threshold.
+- Validation: 196 tests passed.
+
 ## 0.10.14 - Turbo uninterrupted and anti-cycle journal deduplicated
 
 - Never arm or continue a certified-temperature calibration during an explicit Turbo heating request.

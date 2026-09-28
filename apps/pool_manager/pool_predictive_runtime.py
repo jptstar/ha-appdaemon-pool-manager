@@ -939,6 +939,26 @@ class PredictiveHeatingSupport(DecisionSupport):
         started_at = self.chauffage_predictif_measurement_started_at
         total_reference_s = tempo_eau + stable_s
         if not isinstance(started_at, datetime.datetime):
+            # A certification can be armed while the compressor is still
+            # physically running because the protected PAC stop is waiting for
+            # its minimum-on anti-cycle timer. That is not a hydraulic flow
+            # failure: report it explicitly so Home Assistant does not display
+            # the misleading "attente débit" state.
+            try:
+                pac_active = bool(self._pac_power_active())
+            except Exception:
+                pac_active = False
+
+            if pac_active:
+                remaining = 0
+                remaining_reader = getattr(self, "_pac_min_on_remaining_s", None)
+                if callable(remaining_reader):
+                    try:
+                        remaining = max(0, int(remaining_reader()))
+                    except Exception:
+                        remaining = 0
+                return 0, remaining, "waiting_pac_stop"
+
             return 0, total_reference_s, "raising_flow"
 
         try:
@@ -1218,7 +1238,11 @@ class PredictiveHeatingSupport(DecisionSupport):
                 post=False,
                 respect_min_on=True,
             )
-            self.chauffage_predictif_measurement_requested_at = now
+            # Keep the original request timestamp while the protected PAC stop
+            # is deferred by anti-cycle. Rewriting it on every tick hid how long
+            # the certification had actually been waiting.
+            if self.chauffage_predictif_measurement_requested_at is None:
+                self.chauffage_predictif_measurement_requested_at = now
             self.chauffage_predictif_measurement_started_at = None
             self.chauffage_predictif_measurement_stable_at = None
             self.chauffage_predictif_measurement_stable_temp = None

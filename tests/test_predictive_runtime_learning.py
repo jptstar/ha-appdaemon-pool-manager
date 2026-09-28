@@ -764,3 +764,44 @@ def test_measurement_progress_includes_circulation_and_stability_countdown(tmp_p
     assert elapsed == 16 * 60
     assert remaining == 60
     assert phase == "stability"
+
+def test_measurement_progress_reports_pac_stop_wait_instead_of_flow_wait(tmp_path):
+    app = _make_runtime(tmp_path)
+    app.chauffage_predictif_measurement_active = True
+    app.chauffage_predictif_measurement_purpose = "startup_calibration"
+    app.chauffage_predictif_measurement_requested_at = datetime.datetime(
+        2026, 9, 28, 11, 5, 1
+    )
+    app.chauffage_predictif_measurement_started_at = None
+    app.pac_active = True
+    app._pac_min_on_remaining_s = lambda: 899
+
+    elapsed, remaining, phase = app._measurement_progress(
+        datetime.datetime(2026, 9, 28, 11, 5, 2)
+    )
+
+    assert elapsed == 0
+    assert remaining == 899
+    assert phase == "waiting_pac_stop"
+
+
+def test_active_compressor_keeps_initial_measurement_request_timestamp(tmp_path):
+    app = _make_runtime(tmp_path)
+    app.chauffage_predictif_measurement_active = True
+    app.chauffage_predictif_measurement_purpose = "startup_calibration"
+    app.pac_active = True
+    app._pac_off = lambda *args, **kwargs: False
+
+    requested_at = datetime.datetime(2026, 9, 28, 11, 5, 1)
+    app.chauffage_predictif_measurement_requested_at = requested_at
+
+    assert app._update_certified_measurement(
+        requested_at + datetime.timedelta(seconds=30)
+    ) is False
+    assert app.chauffage_predictif_measurement_requested_at == requested_at
+
+    assert app._update_certified_measurement(
+        requested_at + datetime.timedelta(minutes=5)
+    ) is False
+    assert app.chauffage_predictif_measurement_requested_at == requested_at
+

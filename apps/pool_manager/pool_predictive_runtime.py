@@ -1749,8 +1749,13 @@ class PredictiveHeatingSupport(DecisionSupport):
         """Return best current estimate without pretending it is a measurement."""
         now = datetime.datetime.now()
 
-        # A freshly certified measurement is authoritative.
-        if self._certified_fresh(now):
+        # Freshness controls certification/learning, not the age of the
+        # operational estimate. Expiring a certification must never restore
+        # the unaged memory helper and falsely declare the pool ready.
+        if (
+            self.chauffage_predictif_certified_water_c is not None
+            and self._certified_age_s(now) is not None
+        ):
             water = float(self.chauffage_predictif_certified_water_c)
             elapsed_h = (self._certified_age_s(now) or 0.0) / 3600.0
             ambient = self._raw_float(

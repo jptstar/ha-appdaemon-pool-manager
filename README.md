@@ -2,6 +2,13 @@
 
 Pool Manager is an AppDaemon application for advanced swimming-pool filtration orchestration in Home Assistant.
 
+### v0.10.17 — En validation : estimation thermique sans retour à une mémoire ancienne
+
+L'expiration d'une mesure certifiée ne doit plus faire remonter artificiellement
+la température estimée et retarder la chauffe. Les décisions de jour/nuit,
+sécurités et entités restent inchangées ; aucun YAML à remplacer pour ce
+correctif. Voir les [résultats et limites](docs/v0.10.17-RELEASE.md).
+
 ### v0.10.16 — Échéance conservée et circulation PAC fiable
 
 Le préchauffage Smart de jour est conservé pour une échéance aujourd'hui/demain

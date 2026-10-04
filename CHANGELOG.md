@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.17 - Preserve aged operational temperature across certification expiry
+
+- Do not restore an unaged memory-helper temperature when a certified sample expires; continue the operational thermal estimate instead of falsely declaring the pool ready.
+- Keep certification freshness checks and real-measurement learning separate from the operational estimate; preserve actual PAC session timing and net heating gains.
+- Add expiry regression tests and a reproducible replay guard for the six comfort regressions found in the completed v0.10.16 campaign.
+- Preserve all entity IDs, YAML files, heating choices and circulation protections. Validation and remaining limitations are documented in docs/v0.10.17-RELEASE.md.
+
 ## 0.10.16 - Committed comfort recovery and safe PAC circulation
 
 - Preserve an agreed bathing date across marginal weather revisions; report threatened/late or explicitly weather-cancelled targets instead of silently postponing them.

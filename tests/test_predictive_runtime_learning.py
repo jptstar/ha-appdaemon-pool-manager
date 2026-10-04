@@ -608,6 +608,49 @@ def test_heating_estimate_starts_at_actual_pac_session_not_old_certification(tmp
     assert 25.35 <= estimated <= 25.45
 
 
+def test_certification_expiry_does_not_restore_warm_memory(tmp_path):
+    app = _make_runtime(tmp_path)
+    now = datetime.datetime.now()
+    app.args["mem_temp"] = "input_number.memory"
+    read = app._raw_float
+    app._raw_float = lambda entity: 31.0 if entity == "input_number.memory" else read(entity)
+    app.chauffage_predictif_certified_water_c = 31.0
+    app.cover = "open"
+    app.speed = 47
+    app.pac_active = False
+    app.chauffage_predictif_certified_at = now - datetime.timedelta(seconds=21599)
+    before = app._predictive_water_temperature()
+    app.chauffage_predictif_certified_at = now - datetime.timedelta(seconds=21601)
+    assert not app._certified_fresh(now)
+    after = app._predictive_water_temperature()
+    assert after <= before
+    assert before - after < 0.001
+    assert after < 30.8
+    # Estimated cooling must not become a certified learning sample.
+    assert app.chauffage_predictif_certified_water_c == 31.0
+
+
+def test_expired_certification_keeps_actual_heating_session_estimate(tmp_path):
+    app = _make_runtime(tmp_path)
+    now = datetime.datetime.now()
+    app.args["mem_temp"] = "input_number.memory"
+    read = app._raw_float
+    app._raw_float = lambda entity: 31.0 if entity == "input_number.memory" else read(entity)
+    app.chauffage_predictif_certified_water_c = 25.0
+    app.chauffage_predictif_certified_at = now - datetime.timedelta(hours=7)
+    app.pac_active = True
+    app.chauffage_predictif_gain_chauffe_c_par_h = 0.40
+    app.chauffage_predictif_rate_model = {"smart": {"15_20": {"rate": 0.40, "count": 20}}}
+    app._predictive_pac_preset = lambda: "Smart"
+    app._heating_learning_session = {
+        "started_at": now - datetime.timedelta(hours=1),
+        "start_certified_at": app.chauffage_predictif_certified_at,
+        "water": 25.0,
+    }
+    assert not app._certified_fresh(now)
+    assert 25.35 <= app._predictive_water_temperature() <= 25.45
+
+
 def test_wait_requests_protected_pac_stop_and_keeps_measurement_pump_only(tmp_path):
     app = _make_runtime(tmp_path)
     calls = []

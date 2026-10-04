@@ -18,6 +18,7 @@ from the actual installation.
 """
 
 import datetime
+import math
 
 
 _CONDITION_SUN_FACTOR = {
@@ -52,7 +53,8 @@ def _number(value):
     try:
         if value is None or value == "":
             return None
-        return float(value)
+        result = float(value)
+        return result if math.isfinite(result) else None
     except (TypeError, ValueError):
         return None
 
@@ -341,8 +343,10 @@ def find_swim_opportunities(
 
         if (
             temperature is None
-            or temperature < float(min_air_c)
-            or eligibility < float(score_min)
+            or (not day.get('_comfort_committed') and (
+                temperature < float(min_air_c)
+                or eligibility < float(score_min)
+            ))
         ):
             continue
 
@@ -496,9 +500,9 @@ def thermal_delta_bin(water_c, ambient_c):
 
 def normalize_cover_state(value):
     text = str(value or "").strip().casefold()
-    if text in {"closed", "closing", "fermé", "fermee", "fermé(e)", "off"}:
+    if text in {"closed", "fermé", "fermee", "fermé(e)", "off"}:
         return "closed"
-    if text in {"open", "opening", "ouvert", "ouverte", "on"}:
+    if text in {"open", "opening", "closing", "ouvert", "ouverte", "on"}:
         return "open"
     return "unknown"
 

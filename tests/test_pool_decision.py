@@ -230,7 +230,7 @@ def test_missed_same_day_target_keeps_best_effort_daylight_recovery():
     result = app._apply_pool_decision(plan, 28.6, 31.0, now=now)
 
     assert result["should_heat"] is True
-    assert result["preset"] == "Turbo"
+    assert result["preset"] == "Smart"
     assert result["candidate"]["date"] == now.date()
     assert now.date() in result["swim_dates"]
     assert "rattrapage de jour" in result["reason"]
@@ -302,6 +302,23 @@ def test_night_deadline_fallback_and_expiration():
     app._pool_decision_choice_until = dawn
     assert app._pool_choice(dawn - datetime.timedelta(seconds=1)) == "night"
     assert app._pool_choice(dawn) is None
+
+
+def test_day_choices_expire_exactly_at_midnight_and_reset_selector_once():
+    for choice in ('eco', 'skip'):
+        app = App()
+        now = datetime.datetime(2026, 10, 2, 17)
+        deadline = app._pool_choice_deadline(choice, now)
+        assert deadline == datetime.datetime(2026, 10, 3)
+        app._pool_decision_choice = choice
+        app._pool_decision_choice_until = deadline
+        assert app._pool_choice(deadline-datetime.timedelta(seconds=1)) == choice
+        assert app._pool_choice(deadline) is None
+        assert app._pool_choice(deadline+datetime.timedelta(seconds=1)) is None
+        resets = [kwargs for service, kwargs in app.calls
+                  if service == 'input_select/select_option'
+                  and kwargs.get('option') == 'Suivre le plan Smart']
+        assert len(resets) == 1
 
 
 def test_restart_does_not_restore_expired_night_permission():

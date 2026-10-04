@@ -28,6 +28,7 @@ def _make_runtime(tmp_path):
     app.chauffage_predictif_learning_file = str(tmp_path / "thermal.json")
     app.chauffage_predictif_rate_model = {}
     app.chauffage_predictif_loss_model = {}
+    app.chauffage_predictif_perte_nuit_delta10_c_par_h = 0.05
     app.chauffage_predictif_apprentissage_alpha = 0.25
     app.chauffage_predictif_apprentissage_min_s = 1800
     app.chauffage_predictif_apprentissage_mesure_hors_pac = True
@@ -572,6 +573,18 @@ def test_raw_pipe_temperature_does_not_replace_certified_learning_value(tmp_path
     assert value == 26.0
 
 
+def test_idle_low_speed_circulation_projects_cooling_instead_of_frozen_ready(tmp_path):
+    app = _make_runtime(tmp_path)
+    app.chauffage_predictif_certified_water_c = 31.0
+    app.chauffage_predictif_certified_at = datetime.datetime.now()-datetime.timedelta(hours=2)
+    app.pump_on=True
+    app.speed=47
+    app.pac_active=False
+    value=app._predictive_water_temperature()
+    assert value < 31.0
+    assert app.chauffage_predictif_certified_water_c == 31.0
+
+
 def test_heating_estimate_starts_at_actual_pac_session_not_old_certification(tmp_path):
     app = _make_runtime(tmp_path)
     now = datetime.datetime.now()
@@ -804,4 +817,3 @@ def test_active_compressor_keeps_initial_measurement_request_timestamp(tmp_path)
         requested_at + datetime.timedelta(minutes=5)
     ) is False
     assert app.chauffage_predictif_measurement_requested_at == requested_at
-

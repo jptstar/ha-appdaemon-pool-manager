@@ -62,6 +62,13 @@ class FakeStrategy(StrategyMixin):
         return state, f"{speed}% | {extra}".strip(" |")
 
 
+def test_completed_quota_does_not_release_active_pac_to_stop_branch():
+    strategy = FakeStrategy()
+    assert strategy.appliquer_priorite_pac_ou_quota(16,16,True,True,False,'heat',
+                                                   surplus_net=100, reseau_net=-100)
+    assert strategy.speed == 47
+
+
 def test_impossible_quota_does_not_force_100_percent():
     strategy = FakeStrategy(remaining_h=7.17)
     state = strategy.etat_garantie_quota(13.15, 23.53)

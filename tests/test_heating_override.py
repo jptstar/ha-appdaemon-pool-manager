@@ -45,3 +45,10 @@ def test_missing_override_keeps_previous_pac_demand_logic():
     app = make_app(entity=None)
     app.pac_autorisee = lambda: False
     assert app.pac_besoin_chauffe() is False
+
+
+def test_deferred_stop_safety_is_not_masked_by_predictive_wait():
+    app = make_app(entity=None)
+    app._pac_circulation_securite_requise = lambda: True
+    app._pac_circulation_chauffage_requise = lambda: False
+    assert app.pac_besoin_chauffe() is True

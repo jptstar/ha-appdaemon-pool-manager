@@ -186,6 +186,15 @@ class ControlMixin:
             self.reset_stabilite_surplus()
             self.reset_pid()
 
+            if not (h_debut <= h_maintenant <= h_fin) and self.pac_besoin_chauffe():
+                # Night heating outranks the 35% periodic mixing program even
+                # in Temperature mode; never lower flow under an active PAC.
+                self._ensure_pac_flow()
+                self.set_messages('PAC prioritaire hors plage température',
+                                  'circulation minimale PAC maintenue')
+                self.format_texte_solaire_debug(self.get_fan_percentage())
+                return
+
             if nuit and not (h_debut <= h_maintenant <= h_fin):
                 if self.is_night_brassage_slot(heure_actuelle):
                     self.start_night_brassage(now_dt, filtre_temps_eq, objectif_temps_eq)

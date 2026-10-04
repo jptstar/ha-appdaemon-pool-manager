@@ -349,6 +349,16 @@ class DevicesMixin:
             self.pending_stop_reason = None
             return True
 
+        # All normal stop paths, including Temperature mode outside its window,
+        # must honor PAC demand. Safety/explicit forced stops remain above this.
+        demand = getattr(self, 'pac_besoin_chauffe', None)
+        ensure_flow = getattr(self, '_ensure_pac_flow', None)
+        if callable(demand) and demand():
+            self.cancel_pending_stop_sequence()
+            if callable(ensure_flow):
+                ensure_flow()
+            return False
+
         # A certified temperature measurement is a short, protected hydraulic
         # operation. Normal solar/grid/quota optimization may not interrupt it:
         # throwing away an almost-finished 15 min + stability cycle is both less
@@ -416,6 +426,13 @@ class DevicesMixin:
     def apply_pending_stop_after_electrolyseur(self, kwargs):
         reason = getattr(self, "pending_stop_reason", None)
         try:
+            # A PAC request can arrive between scheduling and this callback.
+            demand = getattr(self, 'pac_besoin_chauffe', None)
+            if callable(demand) and demand() and not self.arret_force_actif():
+                ensure_flow = getattr(self, '_ensure_pac_flow', None)
+                if callable(ensure_flow):
+                    ensure_flow()
+                return
             self.set_consigne_electrolyseur(
                 self.consigne_electrolyseur_arret,
                 force=True,

@@ -279,9 +279,11 @@ class DecisionSupport:
             )
         )
         choice = self._pool_choice(now)
+        plan['decision_choice'] = choice or 'eco'
         authorized_night_heat = bool(
             choice == "night"
             and not daylight
+            and plan.get('comfort_status') != 'cancelled_weather'
             and float(water) < float(target) - stop_margin
         )
         if (
@@ -386,7 +388,7 @@ class DecisionSupport:
                 heat_target_c=float(target),
                 trajectory_target_c=float(target),
                 action="PREHEAT",
-                preset=getattr(self, "chauffage_preset_turbo", "Turbo"),
+                preset=getattr(self, "chauffage_preset_smart", "Smart"),
                 candidate=candidate,
                 reason="objectif baignade aujourd'hui en retard; rattrapage de jour",
             )

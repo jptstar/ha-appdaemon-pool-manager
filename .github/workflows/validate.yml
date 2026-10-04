@@ -24,6 +24,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install pytest
+      - run: python -m pip install -r requirements-dev.txt
       - run: python -m py_compile apps/pool_manager/*.py
       - run: pytest -q

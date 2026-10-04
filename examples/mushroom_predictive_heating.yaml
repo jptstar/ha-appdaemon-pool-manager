@@ -26,6 +26,12 @@ secondary: >-
   {% set mpc_energy = state_attr(e, 'mpc_energy_kwh') %}
   {% set target = state_attr(e, 'target_temperature') %}
   {% set night = state_attr(e, 'night_heating') %}
+  {% set comfort = state_attr(e, 'comfort_status') %}
+  {% if comfort == 'at_risk' %}
+  ⚠️ Échéance menacée · rattrapage de jour, température non garantie
+  {% elif comfort == 'late' %}
+  ⚠️ Objectif en retard · {{ state_attr(e, 'comfort_target_date') }}
+  {% endif %}
   {% if estimated is not none %}
   🌡️ Eau ~{{ estimated }}°{% if certified is not none %} · mesurée {{ certified }}°{% endif %}
   {% endif %}

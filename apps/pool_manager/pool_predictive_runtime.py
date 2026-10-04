@@ -9,6 +9,7 @@ import os
 
 from pool_mpc import build_mpc_plan
 from pool_decision import DecisionSupport
+from pool_comfort import ComfortCommitment
 from pool_predictive import (
     build_predictive_plan,
     dashboard_forecast,
@@ -190,6 +191,11 @@ def _fit_predictive_attributes(attributes, max_bytes=PREDICTIVE_ATTRIBUTES_MAX_B
         "swim_hour",
         "swim_hour_weekday",
         "swim_hour_weekend",
+        "comfort_target_date",
+        "comfort_target_hour",
+        "comfort_target_temperature",
+        "comfort_status",
+        "comfort_reason",
         "attribute_payload_compacted",
         "attribute_payload_omitted",
         "attribute_payload_bytes",
@@ -871,6 +877,10 @@ class PredictiveHeatingSupport(DecisionSupport):
             return "unknown"
 
     def _predictive_expected_night_cover_state(self):
+        if not self._predictive_daylight_active():
+            # Once it is night, the observed cover beats a habitual assumption.
+            # Never model a physically open/moving cover as already closed.
+            return self._predictive_cover_state()
         return getattr(
             self,
             "chauffage_predictif_volet_nuit_prevu",
@@ -1197,6 +1207,14 @@ class PredictiveHeatingSupport(DecisionSupport):
         if last_start is not None and certified_at is not None:
             try:
                 new_run_needs_sample = certified_at < last_start
+                last_stop = getattr(self, 'last_pompe_off', None)
+                # Reuse only a recent certified sample after a known short
+                # interruption. A long/unknown stop still requires calibration.
+                if last_stop is not None:
+                    sample_age = (now - certified_at).total_seconds()
+                    stop_age = (last_start - last_stop).total_seconds()
+                    if 0 <= sample_age <= 1800 and 0 <= stop_age <= 300:
+                        new_run_needs_sample = False
             except TypeError:
                 new_run_needs_sample = True
 
@@ -1766,25 +1784,19 @@ class PredictiveHeatingSupport(DecisionSupport):
                 )
                 return water + rate * elapsed_h
 
-            # When circulation is stopped, project passive cooling from the last
-            # certified pool temperature. This is an estimate only; the first
+            # Even with low-speed circulation, an idle PAC does not prevent
+            # passive cooling. This is an estimate only; the first
             # new sample after tempo_eau at/above the reference speed corrects it.
-            if not self.pompe_est_on():
-                loss_rate = estimate_loss_rate(
-                    water,
-                    ambient,
-                    cover_state=self._predictive_cover_state(),
-                    learned_model=self.chauffage_predictif_loss_model,
-                    fallback_delta10_c_per_h=(
-                        self.chauffage_predictif_perte_nuit_delta10_c_par_h
-                    ),
-                )
-                return water - loss_rate * elapsed_h
-
-            # During normal circulation below certification speed, keep the last
-            # certified reference rather than training on a potentially local pipe
-            # temperature.
-            return water
+            loss_rate = estimate_loss_rate(
+                water,
+                ambient,
+                cover_state=self._predictive_cover_state(),
+                learned_model=self.chauffage_predictif_loss_model,
+                fallback_delta10_c_per_h=(
+                    self.chauffage_predictif_perte_nuit_delta10_c_par_h
+                ),
+            )
+            return round(water - loss_rate * elapsed_h, 4)
 
         try:
             memory = self._raw_float(self.args.get("mem_temp"))
@@ -2264,6 +2276,17 @@ class PredictiveHeatingSupport(DecisionSupport):
                 self.chauffage_predictif_forecast_at
             ),
         }
+        attributes.update({key: value for key, value in (plan or {}).items()
+                           if key.startswith('comfort_')})
+        if kind == 'turbo' and 'comfort_target_date' not in attributes:
+            # A temporary boost must not erase the persisted Smart objective.
+            # Keep it through a restart, but do not claim old readiness is fresh.
+            previous = self.get_state(self.entity_chauffage_predictif_status, attribute='all') or {}
+            previous = previous.get('attributes', {}) if isinstance(previous, dict) else {}
+            if previous.get('comfort_target_date'):
+                attributes.update({key: value for key, value in previous.items()
+                                   if key.startswith('comfort_')})
+                attributes['comfort_status'] = 'forced_heating'
         attributes = _fit_predictive_attributes(
             attributes,
             max_bytes=max(
@@ -2473,6 +2496,16 @@ class PredictiveHeatingSupport(DecisionSupport):
             )
 
         self._recover("chauffage_predictif_temperature")
+        if not hasattr(self, '_comfort_commitment'):
+            entity = getattr(self, 'entity_chauffage_predictif_status', None)
+            saved = (self.get_state(entity, attribute='all') or {}) if entity else {}
+            self._comfort_commitment = ComfortCommitment(saved.get('attributes', {}) if isinstance(saved, dict) else {})
+        forecast = self._comfort_commitment.prepare(
+            forecast, datetime.datetime.now(),
+            score_min=getattr(self, 'chauffage_predictif_score_baignade_min', 55),
+            min_air_c=getattr(self, 'chauffage_predictif_temperature_baignade_min_c', 21),
+            weekend_bonus=getattr(self, 'chauffage_predictif_bonus_weekend', 10),
+        )
         plan = self._build_runtime_predictive_plan(
             kind,
             water,
@@ -2480,8 +2513,30 @@ class PredictiveHeatingSupport(DecisionSupport):
             forecast,
         )
         self.chauffage_predictif_last_plan = plan
+        comfort_date = self._comfort_commitment.date
+        hour_key = 'chauffage_predictif_heure_baignade_weekend' if comfort_date and comfort_date.weekday() >= 5 else 'chauffage_predictif_heure_baignade_semaine'
+        plan = self._comfort_commitment.annotate(
+            plan, datetime.datetime.now(), water, target,
+            max(0, min(23, int(self.args.get(hour_key, self.args.get('chauffage_predictif_heure_baignade', 15))))),
+            getattr(self, 'chauffage_predictif_marge_arret_c', .2),
+        )
+        commitment_attributes = {key: value for key, value in plan.items() if key.startswith('comfort_')}
         plan = self._apply_pool_decision(plan, water, target, economy_plan=lambda: self._build_runtime_predictive_plan(
             kind, water, target, forecast, economy=True))
+        plan.update(commitment_attributes)
+        plan = self._comfort_commitment.recover_daylight(
+            plan, datetime.datetime.now(), water, target,
+            daylight=self._predictive_daylight_active(),
+            smart_preset=self.chauffage_preset_smart,
+            margin=getattr(self, 'chauffage_predictif_marge_arret_c', .2),
+        )
+        comfort_key = (plan.get('comfort_target_date'), plan.get('comfort_status'))
+        if comfort_key[0] and comfort_key != getattr(self, '_comfort_last_log_key', None):
+            self._comfort_last_log_key = comfort_key
+            labels = {'planned': 'planifié', 'at_risk': 'échéance menacée', 'ready': 'température estimée atteinte',
+                      'late': 'en retard', 'cancelled_weather': 'annulé météo',
+                      'forecast_missing': 'prévision manquante'}
+            self.log(f"MPC objectif {comfort_key[0]} : {labels.get(comfort_key[1], comfort_key[1])} • {plan.get('comfort_reason', '')}", log='piscine_log')
         self.chauffage_predictif_last_plan = plan
         self.chauffage_predictif_last_plan_at = datetime.datetime.now()
 

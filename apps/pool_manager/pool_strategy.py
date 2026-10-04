@@ -332,7 +332,8 @@ class StrategyMixin:
             # allowance, hold the pump at its minimum PAC circulation speed.
             en_plage_solaire = self.est_dans_plage(self.heure_debut_solaire, self.heure_fin_solaire)
             import_reseau = max(0.0, float(reseau_net or 0.0))
-            if en_plage_solaire and import_reseau <= self.pac_import_max_jour_w:
+            if (en_plage_solaire and import_reseau <= self.pac_import_max_jour_w
+                    and filtre_temps_eq < objectif_temps_eq):
                 return False
 
             vitesse_appliquee = self.set_pump_percentage(vitesse_min_pac)

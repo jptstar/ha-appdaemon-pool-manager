@@ -31,7 +31,8 @@ def _number(value):
     try:
         if value is None or value == "":
             return None
-        return float(value)
+        result = float(value)
+        return result if math.isfinite(result) else None
     except (TypeError, ValueError):
         return None
 
@@ -923,6 +924,38 @@ def build_mpc_plan(
     confidence = model.confidence()
     model.heating_safety_factor = max(0.5, min(1.0, float(heating_safety_factor)))
 
+    # Missing middle days still consume heat. Insert conservative, non-bathing
+    # rows instead of making two distant dates adjacent in the thermal model.
+    forecast = [dict(row) for row in forecast]
+    dated = {row['date']: row for row in forecast
+             if isinstance(row.get('date'), datetime.date)}
+    if dated:
+        cursor = min(dated)
+        while cursor < max(dated):
+            if cursor not in dated:
+                neighbors = sorted(dated, key=lambda day: abs((day-cursor).days))[:2]
+                row = dict(dated[neighbors[0]])
+                row.update(date=cursor, score=0.0, strategic_score=0.0,
+                           usage_score=0.0, forecast_missing=True,
+                           _comfort_committed=False)
+                for key in ('temperature', 'templow', 'heating_temperature', 'night_heating_temperature'):
+                    values = [dated[d].get(key) for d in neighbors]
+                    values = [v for v in values if isinstance(v, (int, float))]
+                    if values:
+                        row[key] = min(values)
+                dated[cursor] = row
+            cursor += datetime.timedelta(days=1)
+        forecast = [dated[day] for day in sorted(dated)]
+    missed_swim_dates = []
+
+    def restrict_fallback(fallback):
+        if not daylight_active and not allow_night_heating:
+            fallback.update(should_heat=False, night_heating=False,
+                            heat_target_c=None, action='WAIT',
+                            reason='chauffe nocturne non autorisée')
+        fallback['missed_swim_dates'] = list(missed_swim_dates)
+        return fallback
+
     opportunities = find_swim_opportunities(
         forecast,
         today,
@@ -960,6 +993,10 @@ def build_mpc_plan(
             microsecond=0,
         )
         if now >= deadline:
+            if water < target - float(stop_margin_c) and any(
+                o['date'] == today for o in opportunities
+            ):
+                missed_swim_dates.append(today)
             opportunities = [o for o in opportunities if o['date'] != today]
         start_hour = max(0.0, 12.0 - float(day_hours) / 2.0)
         forecast = [dict(row) for row in forecast]
@@ -1027,13 +1064,12 @@ def build_mpc_plan(
             swim_hour_weekday=weekday_swim_hour,
             swim_hour_weekend=weekend_swim_hour,
         )
-        return fallback
+        return restrict_fallback(fallback)
 
     # Optimize all credible comfort windows. If one particular target is
     # physically unreachable even with exceptional night heating, discard only
     # that failed target and preserve the rest of the horizon.
     active_swim_dates = sorted({item["date"] for item in opportunities})
-    missed_swim_dates = []
     optimized = None
     used_night = False
     while active_swim_dates:
@@ -1129,7 +1165,7 @@ def build_mpc_plan(
             missed_swim_dates=missed_swim_dates,
             reason="aucune fenêtre baignade thermiquement atteignable; réserve minimale",
         )
-        return fallback
+        return restrict_fallback(fallback)
 
     path = _annotate_horizon_path(
         path=optimized["path"],

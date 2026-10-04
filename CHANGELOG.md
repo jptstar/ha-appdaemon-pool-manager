@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.10.16 - Committed comfort recovery and safe PAC circulation
+
+- Preserve an agreed bathing date across marginal weather revisions; report threatened/late or explicitly weather-cancelled targets instead of silently postponing them.
+- Continue bounded Smart daylight recovery for a threatened committed deadline today/tomorrow, respecting suspension and night permissions.
+- Project passive cooling during idle low-speed circulation instead of freezing an estimated ready temperature.
+- Keep PAC hydraulic minimum when filtration quota is complete, during deferred stops and outside Temperature-mode filtration windows.
+- Treat moving/unknown covers conservatively and missing forecast days as elapsed thermal days; reject non-finite numeric inputs.
+- Add offline reproducible simulation, verified pair/triple coverage and durable progress checkpoints; preserve entity IDs and attribute budgets.
+- Validation results for this release are recorded in docs/v0.10.16-RELEASE.md.
+
 ## 0.10.15 - Distinguish PAC anti-cycle wait from hydraulic flow wait
 
 - Report a dedicated `waiting_pac_stop` certification phase while the compressor is still physically active and its protected stop is deferred by the minimum-on anti-cycle timer.

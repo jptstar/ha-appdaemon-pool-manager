@@ -2,6 +2,15 @@
 
 Pool Manager is an AppDaemon application for advanced swimming-pool filtration orchestration in Home Assistant.
 
+### v0.10.16 — Échéance conservée et circulation PAC fiable
+
+Le préchauffage Smart de jour est conservé pour une échéance aujourd'hui/demain
+jugée menacée ; suspension et autorisation nocturne restent prioritaires.
+L'estimation tient compte du refroidissement même pendant une circulation lente
+sans chauffe. Aucun nom d'entité ne change. Voir les
+[notes de version](docs/v0.10.16-RELEASE.md) et le
+[simulateur hors ligne](docs/SIMULATEUR.md).
+
 ### v0.10.14 — Uninterrupted Turbo heating
 
 An explicit Turbo is no longer interrupted by predictive temperature
@@ -141,6 +150,12 @@ python -m compileall -q apps/pool_manager
 
 The architecture suite also verifies that domain components have one method
 owner and that the canonical v0.9.1 Home Assistant entity mapping is unchanged.
+
+Offline scenario auditing and closed-loop controller simulations are documented
+in [SIMULATEUR.md](docs/SIMULATEUR.md). The simulator can enumerate and execute
+540,000 finite combinations, with separate smoke and verified pairwise suites.
+Physical-model limitations and executed coverage are explicitly distinguished
+from exhaustive coverage; it never connects to a live Home Assistant instance.
 
 ## Installation
 

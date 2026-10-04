@@ -177,3 +177,21 @@ def test_forced_stop_still_overrides_active_measurement():
     assert devices.calls == [
         ("fan/turn_off", {"entity_id": "fan.pool"})
     ]
+
+
+def test_temperature_window_stop_cannot_interrupt_pac_demand():
+    devices = FakeDevices(current=47, mode=TAB_MODE[0])
+    devices.cancel_timer = lambda *args, **kwargs: None
+    devices.pac_besoin_chauffe = lambda: True
+    devices._ensure_pac_flow = lambda: devices.calls.append(('ensure_flow', {}))
+    assert devices.turn_off_pompe_mem(reason='hors plage température') is False
+    assert devices.calls == [('ensure_flow', {})]
+
+
+def test_delayed_stop_rechecks_pac_demand_before_switching_pump_off():
+    devices = FakeDevices(current=47)
+    devices.pac_besoin_chauffe = lambda: True
+    devices._ensure_pac_flow = lambda: devices.calls.append(('ensure_flow', {}))
+    devices.apply_pending_stop_after_electrolyseur({})
+    assert devices.calls == [('ensure_flow', {})]
+    assert not devices.stop_sequence_active

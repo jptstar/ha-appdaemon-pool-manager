@@ -165,11 +165,13 @@ class FiltrationPiscine(
         """
         if self.derogation_chauffage_active():
             return True
+        # A pending compressor stop/post-circulation overrides a logical WAIT.
+        # Otherwise a false predictive request masks the hydraulic safety hold.
+        if self._pac_circulation_securite_requise():
+            return True
         heating_request = self._pac_circulation_chauffage_requise()
         if heating_request is not None:
             return bool(heating_request)
-        if self._pac_circulation_securite_requise():
-            return True
         return self._pac_besoin_chauffe_physique()
 
     def temperature_eau_brute_electrolyse(self):

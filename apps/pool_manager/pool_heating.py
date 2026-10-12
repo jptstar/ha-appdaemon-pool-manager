@@ -733,7 +733,6 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         if callable(pool_choice):
             pool_choice(datetime.datetime.now())
 
-        self._update_predictive_learning()
         mode_chauffage = self.chauffage_mode()
         kind = chauffage_mode_kind(mode_chauffage)
         if self._season_locked(kind):
@@ -751,6 +750,9 @@ class HeatingModeMixin(PredictiveHeatingSupport):
             )
             self._pac_off("fermeture saisonnière", post=True)
             return
+
+        # No thermal learning or calibration may begin after the seasonal lock.
+        self._update_predictive_learning()
 
         if kind == "unknown":
             self._cancel_chauffage_start()

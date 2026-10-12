@@ -150,6 +150,7 @@ class HeatingModeMixin(PredictiveHeatingSupport):
             1.0, float(self.args.get("chauffage_fin_saison_derogation_h", 24))
         )
         self._season_latched = False
+        self._season_reset_pending = False
         self._season_cold_since_cache = None
         self._season_last_decision = None
         self._season_last_recommendation = False
@@ -179,6 +180,12 @@ class HeatingModeMixin(PredictiveHeatingSupport):
 
     def _season_set_closed(self, closed):
         self._season_latched = bool(closed)
+        if not closed:
+            # HA state writes can be asynchronous. Do not re-latch from an
+            # old on-state in the same safety tick as explicit reopening.
+            self._season_reset_pending = True
+        else:
+            self._season_reset_pending = False
         entity = getattr(self, "entity_chauffage_saison_terminee", None)
         if not entity:
             return
@@ -196,7 +203,12 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         if not getattr(self, "chauffage_fin_saison_hybride", False):
             return False
         kind = kind or chauffage_mode_kind(self.chauffage_mode())
-        if getattr(self, "_season_latched", False) or self._season_closed_helper():
+        saved_closed = self._season_closed_helper()
+        if getattr(self, "_season_reset_pending", False):
+            if not saved_closed:
+                self._season_reset_pending = False
+            saved_closed = False
+        if getattr(self, "_season_latched", False) or saved_closed:
             self._season_latched = True
             return True
         month, day = self.chauffage_fin_saison_cutoff

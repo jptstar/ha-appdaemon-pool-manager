@@ -30,3 +30,28 @@ timer:
     name: Chauffage piscine
     restore: true
     icon: mdi:timer
+
+# Optional for chauffage_fin_saison_hybride: true.
+# Merge into your existing Home Assistant package; do not duplicate headings.
+input_boolean:
+  piscine_chauffage_saison_terminee:
+    name: Piscine - Fin de saison confirmée
+    icon: mdi:calendar-lock
+
+input_datetime:
+  piscine_chauffage_froid_depuis:
+    name: Piscine - Froid continu depuis
+    has_date: true
+    has_time: true
+    icon: mdi:thermometer-low
+
+  piscine_chauffage_derogation_jusqua:
+    name: Piscine - Dérogation chauffage jusqu'à
+    has_date: true
+    has_time: true
+    icon: mdi:clock-check-outline
+
+input_button:
+  piscine_chauffage_derogation_24h:
+    name: Piscine - Dérogation chauffage 24 h
+    icon: mdi:clock-plus-outline

@@ -213,3 +213,23 @@ def test_existing_mpc_request_survives_good_swim_window():
     app._request_chauffage_start = lambda *args: app.services.append(("pac_start",{}))
     app._manage_predictive_heating("end_season")
     assert any(n=="pac_start" for n,_ in app.services)
+
+
+def test_override_button_in_automatic_mode_does_not_force_season_lock():
+    app = heating(datetime.datetime(2026, 11, 1))
+    app.chauffage_mode = lambda: "Automatique"
+    app.safety_tick = lambda args: None
+    app._season_override_button_pressed("input_button.override", "state", None, "now", {})
+    assert not app._season_latched
+    assert not any(name=="input_datetime/set_datetime" for name,_ in app.services)
+
+
+def test_cold_confirmation_timer_resets_on_sensor_outage():
+    app = heating()
+    app._states["input_datetime.cold_since"] = "2026-10-09 11:00:00"
+    app._raw_float = lambda entity: None
+    avg, cold_since = app._season_cold_since(app._season_now())
+    assert avg is None and cold_since is None
+    assert any(name == "input_datetime/set_datetime" and
+               kw.get("datetime") == "2000-01-01 00:00:00"
+               for name, kw in app.services)

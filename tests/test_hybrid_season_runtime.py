@@ -163,6 +163,8 @@ class FakeComfort:
 def simulate_runtime_mpc(season_decision):
     app = heating()
     app.chauffage_predictif = True
+    app.chauffage_preset_smart = "Smart"
+    app.chauffage_preset_turbo = "Turbo"
     app._comfort_commitment = FakeComfort()
     app._refresh_predictive_forecast = lambda: [{"usage_score": 20}]
     app._predictive_water_temperature = lambda: 21.0

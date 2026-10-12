@@ -6,6 +6,7 @@ from datetime import timedelta
 
 from pool_common import TAB_MODE
 from pool_predictive_runtime import PredictiveHeatingSupport
+from pool_season import decide_season
 
 
 CHAUFFAGE_DESACTIVE = "Désactivé"
@@ -89,6 +90,7 @@ class HeatingModeMixin(PredictiveHeatingSupport):
 
         # v0.6 common predictive engine; v0.5 fin_saison_* keys remain aliases.
         self._initialize_predictive_heating()
+        self._initialize_season_heating()
 
         self.chauffage_mode_precedent = CHAUFFAGE_AUTO
         self.handle_chauffage_start = None
@@ -110,6 +112,263 @@ class HeatingModeMixin(PredictiveHeatingSupport):
                 )
             except Exception:
                 pass
+
+
+    # ------------------- heating-only hybrid end-of-season -------------------
+
+    def _initialize_season_heating(self):
+        # Explicit opt-in keeps all existing users' heating behavior unchanged.
+        self.chauffage_fin_saison_hybride = self._bool_value(
+            self.args.get("chauffage_fin_saison_hybride", False)
+        )
+        self.entity_chauffage_saison_terminee = self.args.get(
+            "entity_chauffage_saison_terminee"
+        )
+        self.entity_chauffage_froid_depuis = self.args.get(
+            "entity_chauffage_froid_depuis"
+        )
+        self.entity_chauffage_derogation_jusqua = self.args.get(
+            "entity_chauffage_derogation_jusqua"
+        )
+        self.entity_chauffage_derogation_bouton = self.args.get(
+            "entity_chauffage_derogation_bouton"
+        )
+        cutoff = str(self.args.get("chauffage_fin_saison_date", "10-31")).strip()
+        try:
+            month, day = (int(part) for part in cutoff.split("-"))
+            datetime.date(2026, month, day)
+        except (TypeError, ValueError):
+            month, day = 10, 31
+        self.chauffage_fin_saison_cutoff = (month, day)
+        self.chauffage_fin_saison_seuil_7j_c = float(
+            self.args.get("chauffage_fin_saison_seuil_7j_c", 16.0)
+        )
+        self.chauffage_fin_saison_confirmation_h = max(
+            1.0, float(self.args.get("chauffage_fin_saison_confirmation_h", 72))
+        )
+        self.chauffage_fin_saison_derogation_h = max(
+            1.0, float(self.args.get("chauffage_fin_saison_derogation_h", 24))
+        )
+        self._season_latched = False
+        self._season_reset_pending = False
+        self._season_cold_since_cache = None
+        self._season_last_decision = None
+        self._season_last_recommendation = False
+        if self.chauffage_fin_saison_hybride:
+            if not self.entity_chauffage_saison_terminee:
+                self._fault(
+                    "season_persistence",
+                    "Fin de saison hybride: helper de verrouillage manquant"
+                )
+            if self.entity_chauffage_derogation_bouton:
+                self.listen_state(
+                    self._season_override_button_pressed,
+                    self.entity_chauffage_derogation_bouton,
+                )
+
+    def _season_now(self):
+        return datetime.datetime.now()
+
+    def _season_closed_helper(self):
+        entity = getattr(self, "entity_chauffage_saison_terminee", None)
+        if not entity:
+            return False
+        try:
+            return str(self.get_state(entity)).strip().lower() == "on"
+        except Exception:
+            return False
+
+    def _season_set_closed(self, closed):
+        self._season_latched = bool(closed)
+        if not closed:
+            # HA state writes can be asynchronous. Do not re-latch from an
+            # old on-state in the same safety tick as explicit reopening.
+            self._season_reset_pending = True
+        else:
+            self._season_reset_pending = False
+        entity = getattr(self, "entity_chauffage_saison_terminee", None)
+        if not entity:
+            return
+        try:
+            actual = self._season_closed_helper()
+            if actual != closed:
+                self.call_service(
+                    "input_boolean/turn_on" if closed else "input_boolean/turn_off",
+                    entity_id=entity,
+                )
+        except Exception as exc:
+            self._fault("season_persistence", f"Verrou saisonnier non sauvegardé: {exc}")
+
+    def _season_locked(self, kind=None):
+        if not getattr(self, "chauffage_fin_saison_hybride", False):
+            return False
+        kind = kind or chauffage_mode_kind(self.chauffage_mode())
+        saved_closed = self._season_closed_helper()
+        if getattr(self, "_season_reset_pending", False):
+            if not saved_closed:
+                self._season_reset_pending = False
+            saved_closed = False
+        if getattr(self, "_season_latched", False) or saved_closed:
+            self._season_latched = True
+            return True
+        month, day = self.chauffage_fin_saison_cutoff
+        now = self._season_now()
+        if kind == "end_season" and now.date() >= datetime.date(now.year, month, day):
+            self._season_set_closed(True)
+            return True
+        return False
+
+    def _season_heat_allowed(self, kind=None):
+        if not getattr(self, "chauffage_fin_saison_hybride", False):
+            return True
+        kind = kind or chauffage_mode_kind(self.chauffage_mode())
+        if self._season_locked(kind):
+            return False
+        if kind == "end_season":
+            decision = getattr(self, "_season_last_decision", None)
+            return bool(decision and decision.heat_allowed)
+        return True
+
+    def _season_cold_since(self, now):
+        entity = getattr(self, "entity_chauffage_froid_depuis", None)
+        cold_since = getattr(self, "_season_cold_since_cache", None)
+        if entity:
+            try:
+                saved = self._parse_datetime(self.get_state(entity))
+                if saved and saved.year >= 2020:
+                    cold_since = saved.replace(tzinfo=None)
+            except Exception:
+                pass
+
+        sensor = self.args.get("entity_temperature_exterieure_moyenne_7j")
+        average = self._raw_float(sensor) if sensor else None
+        if average is None:
+            # Interrupt continuity on a sensor outage. We cannot assert
+            # 72 consecutive valid hours across missing measurements.
+            if cold_since is not None:
+                self._season_cold_since_cache = None
+                if entity:
+                    try:
+                        self.call_service(
+                            "input_datetime/set_datetime",
+                            entity_id=entity,
+                            datetime="2000-01-01 00:00:00",
+                        )
+                    except Exception:
+                        pass
+            return None, None
+
+        is_cold = average < self.chauffage_fin_saison_seuil_7j_c
+        new_since = (cold_since or now) if is_cold else None
+        if new_since != cold_since:
+            self._season_cold_since_cache = new_since
+            if entity:
+                try:
+                    self.call_service(
+                        "input_datetime/set_datetime",
+                        entity_id=entity,
+                        datetime=(
+                            new_since.strftime("%Y-%m-%d %H:%M:%S")
+                            if new_since else "2000-01-01 00:00:00"
+                        ),
+                    )
+                except Exception as exc:
+                    self._fault(
+                        "season_cold_helper", f"Historique de froid non sauvegardé: {exc}"
+                    )
+        return average, new_since
+
+    def _season_override_until(self):
+        entity = getattr(self, "entity_chauffage_derogation_jusqua", None)
+        if not entity:
+            return None
+        try:
+            parsed = self._parse_datetime(self.get_state(entity))
+            return parsed.replace(tzinfo=None) if parsed else None
+        except Exception:
+            return None
+
+    def _season_override_button_pressed(self, entity, attribute, old, new, kwargs):
+        if not getattr(self, "chauffage_fin_saison_hybride", False):
+            return
+        now = self._season_now()
+        kind = chauffage_mode_kind(self.chauffage_mode())
+        if kind != "end_season":
+            return
+        if self._season_locked(kind):
+            self.log(
+                "Dérogation refusée : fermeture saisonnière définitive",
+                log="piscine_log",
+            )
+            return
+        target = getattr(self, "entity_chauffage_derogation_jusqua", None)
+        if not target:
+            return
+        until = now + timedelta(hours=self.chauffage_fin_saison_derogation_h)
+        try:
+            self.call_service(
+                "input_datetime/set_datetime",
+                entity_id=target,
+                datetime=until.strftime("%Y-%m-%d %H:%M:%S"),
+            )
+            self._season_last_decision = None
+            self.safety_tick({})
+        except Exception as exc:
+            self._fault("season_override", f"Dérogation indisponible: {exc}")
+
+    def _season_policy_for_plan(self, plan, forecast):
+        now = self._season_now()
+        mean, cold_since = self._season_cold_since(now)
+        forecast_age = self._predictive_forecast_age_s()
+        valid = bool(forecast) and (
+            forecast_age is not None
+            and forecast_age <= self.chauffage_predictif_prevision_max_age_s
+        )
+        scores = []
+        for item in forecast or []:
+            try:
+                scores.append(float(item.get("usage_score", item.get("score", 0))))
+            except (ValueError, TypeError, AttributeError):
+                scores.append(0.0)
+        viable = bool(
+            (plan or {}).get("swim_dates") or (plan or {}).get("candidate")
+        )
+        decision = decide_season(
+            now, mode="end_season",
+            mean_7d_c=mean,
+            cold_since=cold_since,
+            forecast_scores=scores,
+            min_score=self.chauffage_predictif_score_baignade_min,
+            viable_window=viable,
+            forecast_ok=valid,
+            already_closed=self._season_locked("end_season"),
+            override_until=self._season_override_until(),
+            cutoff_month=self.chauffage_fin_saison_cutoff[0],
+            cutoff_day=self.chauffage_fin_saison_cutoff[1],
+            cold_threshold_c=self.chauffage_fin_saison_seuil_7j_c,
+            cold_confirmation_h=self.chauffage_fin_saison_confirmation_h,
+        )
+        self._season_last_decision = decision
+        if decision.closure_recommended and not self._season_last_recommendation:
+            message = (
+                "Fin de saison recommandée : aucune fenêtre de baignade "
+                "réalisable et refroidissement durable. Pour verrouiller "
+                "le chauffage dès maintenant, activer "
+                "input_boolean.piscine_chauffage_saison_terminee. "
+                "Sans action, la pause météo reste réversible."
+            )
+            self.log(message, log="piscine_log")
+            try:
+                self.call_service(
+                    "persistent_notification/create",
+                    title="Piscine • Fin de saison recommandée",
+                    message=message,
+                    notification_id="pool_manager_fin_saison",
+                )
+            except Exception:
+                pass
+        self._season_last_recommendation = decision.closure_recommended
+        return decision
 
     def chauffage_mode(self):
         if not self.entity_chauffage:
@@ -238,6 +497,15 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         old_kind = chauffage_mode_kind(old_mode)
         new_kind = chauffage_mode_kind(new_mode)
 
+        if getattr(self, "chauffage_fin_saison_hybride", False):
+            if old_kind == "end_season":
+                self._season_locked("end_season")
+            if new_kind == "season_start" and old_kind != "season_start":
+                # A deliberate new-season choice is the ONLY reset of a
+                # persisted closure; weather and automatic modes never reset it.
+                self._season_set_closed(False)
+            self._season_last_decision = None
+
         if new_kind == "turbo":
             if old_kind != "turbo":
                 self._set_chauffage_precedent(old_mode)
@@ -294,6 +562,9 @@ class HeatingModeMixin(PredictiveHeatingSupport):
             return False
 
     def _set_pac_heat(self, preset, label):
+        if not self._season_heat_allowed():
+            self._cancel_chauffage_start()
+            return False
         if not self._available(self.entity_pac_climate):
             self._fault("pac_climate", f"PAC indisponible ({label})")
             return False
@@ -363,6 +634,9 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         return True
 
     def _request_chauffage_start(self, preset, label):
+        if not self._season_heat_allowed():
+            self._cancel_chauffage_start()
+            return
         if not self._chauffage_pool_mode_autorise():
             return
         if self._pac_start_deferred(label):
@@ -388,7 +662,8 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         self.handle_chauffage_start = None
         kind = chauffage_mode_kind(self.chauffage_mode())
         if (
-            not self._predictive_start_still_allowed(kind)
+            not self._season_heat_allowed(kind)
+            or not self._predictive_start_still_allowed(kind)
             or not self._chauffage_pool_mode_autorise()
         ):
             self._cancel_chauffage_start()
@@ -458,9 +733,26 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         if callable(pool_choice):
             pool_choice(datetime.datetime.now())
 
-        self._update_predictive_learning()
         mode_chauffage = self.chauffage_mode()
         kind = chauffage_mode_kind(mode_chauffage)
+        if self._season_locked(kind):
+            self.chauffage_predictif_heat_requested = False
+            self.chauffage_predictif_heat_target_c = None
+            self._cancel_chauffage_start()
+            self._cancel_pac_start()
+            self._season_last_decision = decide_season(
+                self._season_now(), mode=kind, already_closed=True,
+                cutoff_month=self.chauffage_fin_saison_cutoff[0],
+                cutoff_day=self.chauffage_fin_saison_cutoff[1],
+            )
+            self._update_predictive_diagnostics(
+                kind, override="🔒 Chauffage fermé pour la saison"
+            )
+            self._pac_off("fermeture saisonnière", post=True)
+            return
+
+        # No thermal learning or calibration may begin after the seasonal lock.
+        self._update_predictive_learning()
 
         if kind == "unknown":
             self._cancel_chauffage_start()
@@ -533,6 +825,9 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         # itself may deliberately remain off during the 70% / 15-minute mixing
         # cycle. Reuse the existing pump-demand path instead of creating a
         # second hydraulic control loop.
+        if getattr(self, "chauffage_fin_saison_hybride", False):
+            if not self._season_heat_allowed():
+                return False
         if (
             getattr(self, "chauffage_predictif_measurement_active", False)
             and not self.arret_force_actif()

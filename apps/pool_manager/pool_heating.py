@@ -243,7 +243,19 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         sensor = self.args.get("entity_temperature_exterieure_moyenne_7j")
         average = self._raw_float(sensor) if sensor else None
         if average is None:
-            # Missing sensor cannot confirm a cooling trend.
+            # Interrupt continuity on a sensor outage. We cannot assert
+            # 72 consecutive valid hours across missing measurements.
+            if cold_since is not None:
+                self._season_cold_since_cache = None
+                if entity:
+                    try:
+                        self.call_service(
+                            "input_datetime/set_datetime",
+                            entity_id=entity,
+                            datetime="2000-01-01 00:00:00",
+                        )
+                    except Exception:
+                        pass
             return None, None
 
         is_cold = average < self.chauffage_fin_saison_seuil_7j_c
@@ -280,7 +292,10 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         if not getattr(self, "chauffage_fin_saison_hybride", False):
             return
         now = self._season_now()
-        if self._season_locked("end_season"):
+        kind = chauffage_mode_kind(self.chauffage_mode())
+        if kind != "end_season":
+            return
+        if self._season_locked(kind):
             self.log(
                 "Dérogation refusée : fermeture saisonnière définitive",
                 log="piscine_log",
@@ -335,11 +350,23 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         )
         self._season_last_decision = decision
         if decision.closure_recommended and not self._season_last_recommendation:
-            self.log(
-                "Fin de saison recommandée : activer le helper de verrouillage "
-                "si vous souhaitez confirmer l'arrêt définitif.",
-                log="piscine_log",
+            message = (
+                "Fin de saison recommandée : aucune fenêtre de baignade "
+                "réalisable et refroidissement durable. Pour verrouiller "
+                "le chauffage dès maintenant, activer "
+                "input_boolean.piscine_chauffage_saison_terminee. "
+                "Sans action, la pause météo reste réversible."
             )
+            self.log(message, log="piscine_log")
+            try:
+                self.call_service(
+                    "persistent_notification/create",
+                    title="Piscine • Fin de saison recommandée",
+                    message=message,
+                    notification_id="pool_manager_fin_saison",
+                )
+            except Exception:
+                pass
         self._season_last_recommendation = decision.closure_recommended
         return decision
 

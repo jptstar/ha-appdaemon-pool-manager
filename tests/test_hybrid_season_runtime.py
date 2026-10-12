@@ -233,3 +233,23 @@ def test_cold_confirmation_timer_resets_on_sensor_outage():
     assert any(name == "input_datetime/set_datetime" and
                kw.get("datetime") == "2000-01-01 00:00:00"
                for name, kw in app.services)
+
+
+@pytest.mark.parametrize("selector", ["Fin de saison • Smart", "Turbo • 2 h", "Automatique"])
+def test_closed_season_stops_before_learning_and_does_not_touch_filtration(selector):
+    app = heating(datetime.datetime(2026, 11, 1))
+    app.chauffage_mode = lambda: selector
+    app._states["input_boolean.season_closed"] = "on"
+    app._pool_choice = lambda now: None
+    app._update_predictive_learning = lambda: pytest.fail(
+        "predictive learning executed despite permanent seasonal closure"
+    )
+    app.chauffage_predictif_heat_requested = True
+    app.chauffage_predictif_heat_target_c = 23.0
+    app._cancel_pac_start = lambda: app.services.append(("cancel_pac", {}))
+    app._update_predictive_diagnostics = lambda *args,**kwargs: None
+    app._pac_off = lambda *args,**kw: app.services.append(("pac_off", kw))
+    app._manage_pac_auto()
+    assert app.chauffage_predictif_heat_requested is False
+    assert any(name == "pac_off" for name,_ in app.services)
+    assert not any(name.startswith("input_select/") for name,_ in app.services)

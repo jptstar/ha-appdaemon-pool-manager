@@ -1,5 +1,23 @@
 # Pool Manager for AppDaemon
 
+### Prochaine version — Fin de saison Smart hybride (optionnelle)
+
+Le mode **Fin de saison • Smart** peut désormais éviter une chauffe de
+préservation à 22 °C lorsqu'aucune baignade n'est réalisable selon le MPC.
+Les pauses restent réversibles. Un refroidissement durable (moyenne 7 j sous
+16 °C pendant 72 h) recommande une fermeture anticipée à confirmer dans HA.
+Le **31 octobre à 00:00**, la fermeture devient automatique et persistante.
+Une reprise de saison nécessite une action explicite sur le mode
+**Début de saison • Smart**. Les modes de filtration, notamment **Hors Gel**,
+ne sont pas modifiés.
+
+La fonction est **désactivée par défaut**, afin de préserver les installations
+existantes. Activer `chauffage_fin_saison_hybride: true` et créer les
+helpers HA décrits dans
+[la procédure de migration](docs/predictive-season-closure-spec.md).
+La dérogation 24 h autorise le MPC avant la fermeture, sans forcer une chauffe
+ni contourner les protections.
+
 Pool Manager is an AppDaemon application for advanced swimming-pool filtration orchestration in Home Assistant.
 
 ### v0.10.16 — Échéance conservée et circulation PAC fiable

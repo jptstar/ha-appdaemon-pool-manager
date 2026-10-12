@@ -196,6 +196,10 @@ def _fit_predictive_attributes(attributes, max_bytes=PREDICTIVE_ATTRIBUTES_MAX_B
         "comfort_target_temperature",
         "comfort_status",
         "comfort_reason",
+        "season_state",
+        "season_reason",
+        "season_closure_recommended",
+        "season_closed",
         "attribute_payload_compacted",
         "attribute_payload_omitted",
         "attribute_payload_bytes",
@@ -2119,6 +2123,19 @@ class PredictiveHeatingSupport(DecisionSupport):
             "icon": "mdi:pool-thermometer",
             "mode": kind,
             "enabled": bool(self.chauffage_predictif),
+            "season_state": (
+                getattr(getattr(self, "_season_last_decision", None), "state", None)
+                if getattr(self, "chauffage_fin_saison_hybride", False)
+                else "disabled"
+            ),
+            "season_reason": getattr(
+                getattr(self, "_season_last_decision", None), "reason", None
+            ),
+            "season_closure_recommended": bool(getattr(
+                getattr(self, "_season_last_decision", None),
+                "closure_recommended", False,
+            )),
+            "season_closed": bool(getattr(self, "_season_latched", False)),
             "action": (plan or {}).get("action"),
             "water_temperature_estimated": (
                 round(float(water), 2) if water is not None else None
@@ -2307,6 +2324,8 @@ class PredictiveHeatingSupport(DecisionSupport):
         signature = (
             state,
             attributes.get("action"),
+            attributes.get("season_state"),
+            attributes.get("season_closed"),
             attributes.get("water_temperature_estimated"),
             attributes.get("certified_water_temperature"),
             attributes.get("measurement_active"),
@@ -2460,6 +2479,11 @@ class PredictiveHeatingSupport(DecisionSupport):
             target,
             forecast,
         )
+        if getattr(self, "chauffage_fin_saison_hybride", False):
+            if self._season_locked(kind):
+                plan = dict(plan, action="WAIT", should_heat=False,
+                            heat_target_c=None, night_heating=False,
+                            reason="fermeture saisonnière définitive")
         self._publish_predictive_status(
             plan=plan,
             forecast=forecast,
@@ -2530,6 +2554,20 @@ class PredictiveHeatingSupport(DecisionSupport):
             smart_preset=self.chauffage_preset_smart,
             margin=getattr(self, 'chauffage_predictif_marge_arret_c', .2),
         )
+        if kind == "end_season" and getattr(self, "chauffage_fin_saison_hybride", False):
+            # IMPORTANT: apply after both MPC and human-decision/comfort
+            # overlays. Neither a 22 °C fallback nor a late comfort
+            # commitment may force heating in a seasonally paused period.
+            season = self._season_policy_for_plan(plan, forecast)
+            if not season.heat_allowed:
+                plan = dict(plan)
+                plan.update(
+                    action="WAIT",
+                    should_heat=False,
+                    heat_target_c=None,
+                    night_heating=False,
+                    reason=f"Fin de saison hybride : {season.reason}",
+                )
         comfort_key = (plan.get('comfort_target_date'), plan.get('comfort_status'))
         if comfort_key[0] and comfort_key != getattr(self, '_comfort_last_log_key', None):
             self._comfort_last_log_key = comfort_key
@@ -2695,6 +2733,8 @@ class PredictiveHeatingSupport(DecisionSupport):
         )
 
     def _predictive_start_still_allowed(self, kind):
+        if hasattr(self, "_season_heat_allowed") and not self._season_heat_allowed(kind):
+            return False
         if kind in {"season_start", "turbo"}:
             return True
         if kind == "end_season":

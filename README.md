@@ -2,12 +2,22 @@
 
 Pool Manager is an AppDaemon application for advanced swimming-pool filtration orchestration in Home Assistant.
 
-### v0.10.17 — En validation : estimation thermique sans retour à une mémoire ancienne
+### v0.10.17 — En validation : chauffe saisonnière et mesures stables
 
 L'expiration d'une mesure certifiée ne doit plus faire remonter artificiellement
 la température estimée et retarder la chauffe. Les décisions de jour/nuit,
 sécurités et entités restent inchangées ; aucun YAML à remplacer pour ce
-correctif. Voir les [résultats et limites](docs/v0.10.17-RELEASE.md).
+correctif. La chauffe automatique s'arrête désormais dès le **10 octobre**
+à minuit local, en passant le sélecteur à « Désactivé ». La filtration et
+ses protections hors gel restent indépendantes. La reprise au printemps
+est manuelle (« Début de saison • Smart »), sans réactivation au 1er janvier.
+Un nouveau Turbo explicitement choisi après la coupure est une exception
+bornée, puis revient à Désactivé ; un redémarrage AppDaemon annule cette
+exception plutôt que de reprendre un ancien Turbo hors saison.
+Les paramètres facultatifs `chauffage_arret_saisonnier: false` et
+`chauffage_date_arret: "10-10"` permettent respectivement de désactiver
+la règle ou de changer sa date. Sans sélecteur chauffage, la compatibilité
+historique est conservée. Voir les [résultats et limites](docs/v0.10.17-RELEASE.md).
 
 ### v0.10.16 — Échéance conservée et circulation PAC fiable
 

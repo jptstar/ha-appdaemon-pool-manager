@@ -372,6 +372,9 @@ class SafetyMixin:
         return True
 
     def _request_pac_start(self):
+        seasonal_block = getattr(self, "_seasonal_heating_blocked", None)
+        if callable(seasonal_block) and seasonal_block():
+            return
         if self.pac_auto_start_pending:
             return
         if self._pac_start_deferred("automatique saisonnier"):
@@ -383,6 +386,10 @@ class SafetyMixin:
 
     def _check_pac_start(self, kwargs):
         self.handle_pac_auto_start = None
+        seasonal_block = getattr(self, "_seasonal_heating_blocked", None)
+        if callable(seasonal_block) and seasonal_block():
+            self._cancel_pac_start()
+            return
         if not self.pac_auto_start_pending:
             return
         if self.gestion_pac_auto and not self.mode_auto_autorise():

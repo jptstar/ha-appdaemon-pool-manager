@@ -27,6 +27,25 @@ from pool_predictive import (
 
 PREDICTIVE_ATTRIBUTES_MAX_BYTES = 14000
 
+
+def hold_preservation_recharge(plan, previous, water, target, margin, daylight):
+    """Keep an authorized recharge's target, never move it upwards or grant night permission."""
+    previous_target = (previous or {}).get("heat_target_c")
+    if (
+        plan.get("action") == "WAIT"
+        and not plan.get("opportunities")
+        and (previous or {}).get("action") == "PRESERVE"
+        and previous.get("should_heat")
+        and isinstance(previous_target, (int, float))
+        and water < min(target, previous_target) - max(0, margin)
+    ):
+        return dict(plan, action="PRESERVE", should_heat=True,
+                    heat_target_c=min(target, previous_target),
+                    trajectory_target_c=min(target, previous_target),
+                    night_heating=not daylight,
+                    reason="terminer la recharge de préservation autorisée")
+    return plan
+
 PREDICTIVE_FORECAST_KEYS = (
     "offset",
     "date",
@@ -1213,7 +1232,11 @@ class PredictiveHeatingSupport(DecisionSupport):
                 if last_stop is not None:
                     sample_age = (now - certified_at).total_seconds()
                     stop_age = (last_start - last_stop).total_seconds()
-                    if 0 <= sample_age <= 1800 and 0 <= stop_age <= 300:
+                    # Ten-minute energy pauses must not create an endless
+                    # 17-minute high-speed calibration loop. Reuse only a
+                    # recent sample after a known short stop; retain its date
+                    # and projected cooling, never certify a raw pipe value.
+                    if 0 <= sample_age <= 3600 and 0 <= stop_age <= 900:
                         new_run_needs_sample = False
             except TypeError:
                 new_run_needs_sample = True
@@ -2517,6 +2540,11 @@ class PredictiveHeatingSupport(DecisionSupport):
             target,
             forecast,
         )
+        if forecast:
+            plan = hold_preservation_recharge(
+                plan, self.chauffage_predictif_last_plan, water, target,
+                self.chauffage_predictif_marge_arret_c, self._predictive_daylight_active(),
+            )
         self.chauffage_predictif_last_plan = plan
         comfort_date = self._comfort_commitment.date
         hour_key = 'chauffage_predictif_heure_baignade_weekend' if comfort_date and comfort_date.weekday() >= 5 else 'chauffage_predictif_heure_baignade_semaine'
@@ -2700,6 +2728,11 @@ class PredictiveHeatingSupport(DecisionSupport):
         )
 
     def _predictive_start_still_allowed(self, kind):
+        seasonal_block = getattr(self, "_seasonal_heating_blocked", None)
+        if callable(seasonal_block) and seasonal_block():
+            return False
+        if bool(getattr(self, "chauffage_predictif_measurement_active", False)):
+            return False
         if kind in {"season_start", "turbo"}:
             return True
         if kind == "end_season":

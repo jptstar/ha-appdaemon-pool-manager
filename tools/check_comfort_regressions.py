@@ -16,6 +16,7 @@ REGRESSIONS = {
     "temperature-boundary-2147", "temperature-boundary-2111",
     "temperature-boundary-2091", "temperature-boundary-2109",
     "temperature-boundary-2125", "all-triples-158",
+    "deadline-1316",
 }
 DIAGNOSTICS = {
     "weather-cover-permission-fault-438", "trajectory-18", "deadline-1261",

@@ -23,6 +23,74 @@ def test_selector_modes_are_classified():
     assert module.chauffage_mode_kind("unexpected") == "unknown"
 
 
+@pytest.mark.parametrize("day,expected", [(9, False), (10, True), (13, True)])
+def test_seasonal_cutoff_local_boundary(day, expected):
+    assert module.seasonal_cutoff_reached(module.datetime.datetime(2026, 10, day)) is expected
+
+
+def test_measurement_blocks_heat_before_service_and_keeps_deferred_stop():
+    app = object.__new__(module.HeatingModeMixin)
+    app.chauffage_predictif_measurement_active = True
+    app.pac_deferred_stop_reason = "certification hors chauffe"
+    app._seasonal_heating_blocked = lambda: False
+    app._available = lambda _: pytest.fail("must not start while measuring")
+    assert app._set_pac_heat("Smart", "test") is False
+    assert app.pac_deferred_stop_reason == "certification hors chauffe"
+    assert app._predictive_start_still_allowed("turbo") is False
+
+
+def test_stale_turbo_cannot_bypass_seasonal_cutoff():
+    app = object.__new__(module.HeatingModeMixin)
+    app.entity_chauffage = "input_select.pool_heating"
+    app.chauffage_arret_saisonnier = True
+    app.chauffage_date_arret = (1, 1)
+    app.chauffage_mode = lambda: "Turbo • 12 h"
+    app._seasonal_turbo_override_until = None
+    assert app._seasonal_heating_blocked()
+    app._seasonal_turbo_override_until = module.datetime.datetime.now() + module.timedelta(hours=1)
+    assert not app._seasonal_heating_blocked()
+    app._seasonal_turbo_override_until = module.datetime.datetime.now() - module.timedelta(seconds=1)
+    assert app._seasonal_heating_blocked()
+
+
+def test_legacy_without_selector_keeps_seasonal_compatibility():
+    app = object.__new__(module.HeatingModeMixin)
+    app.entity_chauffage = None
+    app.chauffage_arret_saisonnier = True
+    app.chauffage_date_arret = (1, 1)
+    assert not app._seasonal_cutoff_active()
+
+
+def test_turbo_returns_to_disabled_after_cutoff():
+    app = object.__new__(module.HeatingModeMixin)
+    app._get_chauffage_precedent = lambda: "Fin de saison • Smart"
+    app._seasonal_cutoff_active = lambda: True
+    options = []
+    app._set_chauffage_selector = options.append
+    app.log = lambda *a, **kw: None
+    app._restore_after_turbo()
+    assert options == ["Désactivé"]
+
+
+def test_cutoff_cancels_pending_heat_and_disables_selector_not_filtration():
+    app = object.__new__(module.HeatingModeMixin)
+    app.entity_chauffage = "input_select.pool_heating"
+    app._seasonal_heating_blocked = lambda: True
+    app.chauffage_mode = lambda: "Fin de saison • Smart"
+    calls = []
+    for name in ["_cancel_chauffage_start", "_cancel_pac_start", "_cancel_turbo_timer"]:
+        setattr(app, name, lambda name=name: calls.append(name))
+    app._set_chauffage_selector = lambda mode: calls.append(mode)
+    app._update_predictive_diagnostics = lambda *a, **kw: None
+    app._pac_off = lambda *a, **kw: calls.append((a, kw))
+    app._manage_pac_auto()
+    assert not app.chauffage_predictif_heat_requested
+    assert app.chauffage_predictif_last_plan is None
+    assert "Désactivé" in calls
+    assert "_cancel_pac_start" in calls
+    assert calls[-1][1]['respect_min_on'] is True
+
+
 def test_all_turbo_durations_are_mapped_to_seconds():
     expected = {
         "Turbo • 1 h": 3600,

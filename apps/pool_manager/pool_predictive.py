@@ -1013,7 +1013,10 @@ def build_predictive_plan(
         if water <= floor_c - stop_margin or projected_next_morning < floor_c:
             target_floor = min(
                 target,
-                floor_target + max(0.0, floor_c - projected_next_morning),
+                # Recharge must include the expected loss, not merely the
+                # shortfall below the floor. The old expression could request
+                # heat to a target already BELOW the current water temperature.
+                floor_target + max(0.0, next_night_loss),
             )
             base.update(
                 action="PRESERVE",

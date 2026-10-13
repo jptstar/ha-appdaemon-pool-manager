@@ -17,6 +17,25 @@ class _Runtime(module.PredictiveHeatingSupport):
     pass
 
 
+def test_preservation_holds_target_and_stops_at_margin():
+    previous = dict(action="PRESERVE", should_heat=True, heat_target_c=23.5)
+    waiting = dict(action="WAIT", should_heat=False, opportunities=[])
+    held = module.hold_preservation_recharge(waiting, previous, 23, 33, .2, True)
+    assert held['should_heat'] and held['heat_target_c'] == 23.5
+    assert held['night_heating'] is False
+    assert module.hold_preservation_recharge(waiting, previous, 23.3, 33, .2, True) is waiting
+    assert module.hold_preservation_recharge(waiting, None, 23, 33, .2, True) is waiting
+
+
+def test_preservation_does_not_replace_new_bathing_plan_or_raise_target():
+    previous = dict(action="PRESERVE", should_heat=True, heat_target_c=23.5)
+    upcoming = dict(action="WAIT", should_heat=False, opportunities=[{'date':'2026-10-05'}])
+    assert module.hold_preservation_recharge(upcoming, previous, 23, 33, .2, True) is upcoming
+    held = module.hold_preservation_recharge(dict(action='WAIT',opportunities=[]), previous, 22, 23, .2, False)
+    assert held['heat_target_c'] == 23
+    assert held['night_heating'] is True  # still checked by downstream manual policy
+
+
 def _make_runtime(tmp_path):
     app = object.__new__(_Runtime)
     app.args = {
@@ -92,6 +111,30 @@ def _make_runtime(tmp_path):
     )
     app.log = lambda *args, **kwargs: None
     return app
+
+
+def test_ten_minute_pause_reuses_recent_certification_without_redating(tmp_path):
+    app = _make_runtime(tmp_path)
+    now = datetime.datetime(2026, 10, 9, 9)
+    app.chauffage_predictif_certified_at = now - datetime.timedelta(minutes=20)
+    app.chauffage_predictif_certified_water_c = 24.4
+    app.last_pompe_off = now - datetime.timedelta(minutes=10)
+    app.last_pompe_on = now
+    app.water = 18.0
+    assert not app._update_certified_measurement(now)
+    assert not app.chauffage_predictif_measurement_active
+    assert app.chauffage_predictif_certified_at == now - datetime.timedelta(minutes=20)
+    assert app.chauffage_predictif_certified_water_c == 24.4
+
+
+def test_long_stop_still_requires_full_calibration(tmp_path):
+    app = _make_runtime(tmp_path)
+    now = datetime.datetime(2026, 10, 9, 9)
+    app.chauffage_predictif_certified_at = now - datetime.timedelta(minutes=30)
+    app.last_pompe_off = now - datetime.timedelta(minutes=16)
+    app.last_pompe_on = now
+    app._update_certified_measurement(now)
+    assert app.chauffage_predictif_measurement_active
 
 
 def test_predictive_plan_journal_ignores_trajectory_micro_adjustments(tmp_path):

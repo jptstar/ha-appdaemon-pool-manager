@@ -64,6 +64,11 @@ def premiere_chauffe_terminee(temperature_eau, consigne, marge_c=0.3):
     return float(temperature_eau) >= float(consigne) - max(0.0, float(marge_c))
 
 
+def seasonal_cutoff_reached(now, month_day=(10, 10)):
+    """Local calendar cutoff; disabled selector persists through New Year."""
+    return (now.month, now.day) >= month_day
+
+
 class HeatingModeMixin(PredictiveHeatingSupport):
     """Single-selector heating policy layered above the normal PAC automation.
 
@@ -76,6 +81,13 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         self.entity_chauffage = self.args.get("entity_chauffage")
         self.entity_chauffage_timer = self.args.get("entity_chauffage_timer")
         self.entity_chauffage_precedent = self.args.get("entity_chauffage_precedent")
+        self.chauffage_arret_saisonnier = str(
+            self.args.get("chauffage_arret_saisonnier", True)
+        ).lower() in {"true", "1", "yes", "on"}
+        cutoff = str(self.args.get("chauffage_date_arret", "10-10"))
+        parsed = datetime.datetime.strptime("2001-" + cutoff, "%Y-%m-%d")
+        self.chauffage_date_arret = (parsed.month, parsed.day)
+        self._seasonal_turbo_override_until = None
 
         self.chauffage_preset_auto = self.args.get("chauffage_preset_auto", "Smart")
         self.chauffage_preset_smart = self.args.get("chauffage_preset_smart", "Smart")
@@ -229,6 +241,8 @@ class HeatingModeMixin(PredictiveHeatingSupport):
     def _restore_after_turbo(self):
         self.chauffage_turbo_ends_at = None
         previous = self._get_chauffage_precedent()
+        if self._seasonal_cutoff_active():
+            previous = CHAUFFAGE_DESACTIVE
         self._set_chauffage_selector(previous)
         self.log(f"PAC Turbo terminé -> chauffage {previous}", log="piscine_log")
 
@@ -237,6 +251,19 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         new_mode = str(new or "").strip()
         old_kind = chauffage_mode_kind(old_mode)
         new_kind = chauffage_mode_kind(new_mode)
+
+        # Only a new, explicit selector change after the cutoff can grant a
+        # bounded exception. A stale Turbo found at startup never reopens it.
+        self._seasonal_turbo_override_until = None
+        if (
+            new_kind == "turbo"
+            and old_kind != "unknown"
+            and old_mode != new_mode
+            and self._seasonal_cutoff_active()
+        ):
+            self._seasonal_turbo_override_until = datetime.datetime.now() + timedelta(
+                seconds=turbo_duration_seconds(new_mode)
+            )
 
         if new_kind == "turbo":
             if old_kind != "turbo":
@@ -294,6 +321,10 @@ class HeatingModeMixin(PredictiveHeatingSupport):
             return False
 
     def _set_pac_heat(self, preset, label):
+        if self._seasonal_heating_blocked() or bool(
+            getattr(self, "chauffage_predictif_measurement_active", False)
+        ):
+            return False
         if not self._available(self.entity_pac_climate):
             self._fault("pac_climate", f"PAC indisponible ({label})")
             return False
@@ -363,6 +394,11 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         return True
 
     def _request_chauffage_start(self, preset, label):
+        if self._seasonal_heating_blocked() or bool(
+            getattr(self, "chauffage_predictif_measurement_active", False)
+        ):
+            self._cancel_chauffage_start()
+            return
         if not self._chauffage_pool_mode_autorise():
             return
         if self._pac_start_deferred(label):
@@ -451,6 +487,19 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         if not self.entity_chauffage:
             return self._manage_pac_saisonnier()
 
+        if self._seasonal_heating_blocked():
+            self.chauffage_predictif_heat_requested = False
+            self.chauffage_predictif_heat_target_c = None
+            self.chauffage_predictif_last_plan = None
+            self._cancel_chauffage_start()
+            self._cancel_pac_start()
+            self._cancel_turbo_timer()
+            if self.chauffage_mode() != CHAUFFAGE_DESACTIVE:
+                self._set_chauffage_selector(CHAUFFAGE_DESACTIVE)
+            self._update_predictive_diagnostics("disabled", override="⏸ Arrêt saisonnier")
+            self._pac_off("arrêt saisonnier", respect_min_on=True)
+            return
+
         # Expire a bounded manual policy independently from the active heating
         # selector. Previously this happened only inside a Smart/MPC replan, so
         # an overnight choice could remain displayed throughout a long Turbo.
@@ -527,6 +576,21 @@ class HeatingModeMixin(PredictiveHeatingSupport):
                 self.chauffage_preset_smart,
                 "fin de saison",
             )
+
+    def _seasonal_cutoff_active(self):
+        return bool(getattr(self, "entity_chauffage", None)) and bool(getattr(self, "chauffage_arret_saisonnier", False)) and seasonal_cutoff_reached(
+            datetime.datetime.now(), getattr(self, "chauffage_date_arret", (10, 10))
+        )
+
+    def _seasonal_heating_blocked(self):
+        if not self._seasonal_cutoff_active():
+            return False
+        until = getattr(self, "_seasonal_turbo_override_until", None)
+        return not (
+            chauffage_mode_kind(self.chauffage_mode()) == "turbo"
+            and isinstance(until, datetime.datetime)
+            and datetime.datetime.now() < until
+        )
 
     def _pac_circulation_chauffage_requise(self):
         # Certified water measurement requires circulation even though the PAC

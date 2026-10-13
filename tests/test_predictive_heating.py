@@ -210,6 +210,16 @@ def test_floor_protection_heats_only_reserve_not_full_setpoint():
     assert 22 < plan["heat_target_c"] < 30
 
 
+def test_preservation_target_includes_night_loss_and_exceeds_current_water():
+    now = datetime.datetime(2026, 9, 18, 10)
+    forecast = _forecast(now, [(12, "rainy", 0, 90)])
+    plan = _plan(now, forecast, water=23, target=33, minimum_water_c=22,
+                 loss_fallback_delta10_c_per_h=.1)
+    assert plan['action'] == 'PRESERVE'
+    assert 23 < plan['heat_target_c'] <= 33
+    assert plan['heat_target_c'] - plan['predicted_loss_c'] >= 22.49
+
+
 def test_future_good_day_creates_trajectory_not_immediate_full_heat():
     now = datetime.datetime(2026, 9, 18, 8, 0)
     forecast = _forecast(

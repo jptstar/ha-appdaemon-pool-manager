@@ -26,6 +26,20 @@ def test_cartesian_count_and_stable_first_case():
     assert sum(1 for _ in sim.cases()) == 540000
 
 
+def test_seasonal_cutoff_stops_heat_without_forcing_pool_stop():
+    case = {key: domain[0] for key, domain in sim.DOMAINS.items()}
+    case.update(start_time='2026-10-09T18:00:00', water=23.0,
+                heating='Fin de saison • Smart', mode='Intelligent',
+                choice='night', solar='strong', fault='none')
+    result = sim.simulate(case, hours=24, step_s=300, trace=True)
+    assert result['violations'] == []
+    after = [row for row in result['trace'] if row['time'] >= '2026-10-10T01:00:00']
+    assert after
+    assert all(row['heating_mode'] == 'Désactivé' for row in after)
+    assert all(row['pac_w'] < 300 for row in after)
+    assert any(row['speed_pct'] > 0 for row in after)
+
+
 def test_real_controller_runs_offline_without_errors(tmp_path):
     run = subprocess.run([sys.executable, str(ROOT/'tools/simulate_pool.py'),
                           '--hours','1','--limit','1','--output',str(tmp_path)],

@@ -108,6 +108,11 @@ pool_manager:
   chauffage_preset_turbo: Turbo
   chauffage_debut_saison_marge_c: 0.3
 
+  # v0.10.18: selector-based heating cutoff; filtration/freeze remain separate.
+  # Disabled selector persists into winter; reopen manually at season start.
+  chauffage_arret_saisonnier: true
+  chauffage_date_arret: "10-10"
+
   # v0.9 self-learning predictive heating. The same engine is used in
   # Automatique and Fin de saison • Smart. MPC plans all credible bathing
   # windows across the complete weather horizon, not only the next one.

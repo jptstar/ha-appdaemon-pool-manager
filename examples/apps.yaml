@@ -96,6 +96,19 @@ pool_manager:
   chauffage_predictif_score_baignade_min: 55
   chauffage_predictif_bonus_weekend: 10
 
+  # Opt-in hybrid end-of-season heating (leave false for existing installations).
+  # These helpers must exist in the HA package before activation.
+  chauffage_fin_saison_hybride: false
+  chauffage_fin_saison_date: "10-10"
+  chauffage_fin_saison_seuil_7j_c: 16
+  chauffage_fin_saison_confirmation_h: 72
+  chauffage_fin_saison_derogation_h: 24
+  entity_chauffage_saison_terminee: input_boolean.piscine_chauffage_saison_terminee
+  entity_chauffage_froid_depuis: input_datetime.piscine_chauffage_froid_depuis
+  entity_chauffage_derogation_jusqua: input_datetime.piscine_chauffage_derogation_jusqua
+  entity_chauffage_derogation_bouton: input_button.piscine_chauffage_derogation_24h
+  entity_temperature_exterieure_moyenne_7j: sensor.temperature_exterieure_moyenne_7j
+
   # Absolute reserve only. MPC computes a warmer adaptive floor when needed.
   chauffage_predictif_temperature_min_eau_c: 22
 

@@ -1,8 +1,28 @@
 # Pool Manager for AppDaemon
 
+### v0.10.17 — Fin de saison Smart hybride (optionnelle)
+
+Le mode **Fin de saison • Smart** peut désormais éviter une chauffe de
+préservation à 22 °C lorsqu'aucune baignade n'est réalisable selon le MPC.
+Les pauses restent réversibles. Un refroidissement durable (moyenne 7 j sous
+16 °C pendant 72 h) recommande une fermeture anticipée à confirmer dans HA.
+Depuis la v0.10.18, la date par défaut est le **10 octobre à 00:00**.
+Une date explicite dans votre YAML reste prioritaire : remplacer `10-31`
+par `10-10` si vous avez activé le mode hybride avec l'ancien exemple.
+Une reprise de saison nécessite une action explicite sur le mode
+**Début de saison • Smart**. Les modes de filtration, notamment **Hors Gel**,
+ne sont pas modifiés.
+
+La fonction est **désactivée par défaut**, afin de préserver les installations
+existantes. Activer `chauffage_fin_saison_hybride: true` et créer les
+helpers HA décrits dans
+[la procédure de migration](docs/predictive-season-closure-spec.md).
+La dérogation 24 h autorise le MPC avant la fermeture, sans forcer une chauffe
+ni contourner les protections.
+
 Pool Manager is an AppDaemon application for advanced swimming-pool filtration orchestration in Home Assistant.
 
-### v0.10.17 — En validation : chauffe saisonnière et mesures stables
+### v0.10.18 — En validation : chauffe saisonnière et mesures stables
 
 L'expiration d'une mesure certifiée ne doit plus faire remonter artificiellement
 la température estimée et retarder la chauffe. Les décisions de jour/nuit,
@@ -11,13 +31,15 @@ correctif. La chauffe automatique s'arrête désormais dès le **10 octobre**
 à minuit local, en passant le sélecteur à « Désactivé ». La filtration et
 ses protections hors gel restent indépendantes. La reprise au printemps
 est manuelle (« Début de saison • Smart »), sans réactivation au 1er janvier.
-Un nouveau Turbo explicitement choisi après la coupure est une exception
+Sans mode hybride, un nouveau Turbo choisi après la coupure est une exception
 bornée, puis revient à Désactivé ; un redémarrage AppDaemon annule cette
 exception plutôt que de reprendre un ancien Turbo hors saison.
 Les paramètres facultatifs `chauffage_arret_saisonnier: false` et
 `chauffage_date_arret: "10-10"` permettent respectivement de désactiver
 la règle ou de changer sa date. Sans sélecteur chauffage, la compatibilité
-historique est conservée. Voir les [résultats et limites](docs/v0.10.17-RELEASE.md).
+historique est conservée. En mode hybride, le verrou persistant de v0.10.17
+reste prioritaire et interdit Turbo jusqu'à la réouverture explicite de saison.
+Voir les [résultats et limites](docs/v0.10.18-RELEASE.md).
 
 ### v0.10.16 — Échéance conservée et circulation PAC fiable
 

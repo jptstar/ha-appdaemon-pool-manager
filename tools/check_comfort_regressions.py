@@ -4,7 +4,9 @@ This is a numerical regression guard for the offline physics, not a guarantee
 of a real-world bathing temperature. Original shortfalls remain diagnostic.
 """
 import argparse
+from concurrent.futures import ProcessPoolExecutor
 import json
+import multiprocessing
 from pathlib import Path
 
 from run_full_matrix import atomic_json, fingerprint
@@ -28,7 +30,10 @@ def main():
     parser.add_argument("--reference", type=Path, default=ROOT / "outputs/balanced-2026-10-04")
     parser.add_argument("--manifest", type=Path, default=ROOT / "outputs/release-v0.10.16-balanced/manifest.json")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--workers", type=int, default=4)
     args = parser.parse_args()
+    if not 1 <= args.workers <= 4:
+        parser.error("workers must be between 1 and 4")
     source = fingerprint()
     manifest = json.loads(args.manifest.read_text())
     jobs = {job["id"]: job for job in manifest["jobs"]}
@@ -37,12 +42,18 @@ def main():
         (json.loads(line) for line in (args.reference / "results.jsonl").read_text().splitlines())
     }
     results, failures = [], []
-    for identifier in sorted(REGRESSIONS | DIAGNOSTICS):
-        job = jobs[identifier]
+    identifiers = sorted(REGRESSIONS | DIAGNOSTICS)
+    selected = [jobs[identifier] for identifier in identifiers]
+    for job in selected:
+        if reference[job['id']]["case"] != job["case"]:
+            raise ValueError(f"Mismatched reference case: {job['id']}")
+    with ProcessPoolExecutor(max_workers=args.workers, mp_context=multiprocessing.get_context('spawn')) as pool:
+        replayed = list(pool.map(run_job, selected))
+    for result in replayed:
+        identifier = result['id']
         before = reference[identifier]
-        if before["case"] != job["case"]:
+        if before["case"] != result["case"]:
             raise ValueError(f"Mismatched reference case: {identifier}")
-        result = run_job(job)
         delta = result["comfort_deficit_c"] - before["comfort_deficit_c"]
         result.update(reference_deficit_c=before["comfort_deficit_c"], deficit_delta_c=delta)
         results.append(result)

@@ -371,9 +371,18 @@ class SafetyMixin:
             )
         return True
 
-    def _request_pac_start(self):
+    def _pac_start_policy_blocked(self):
+        if bool(getattr(self, "chauffage_predictif_measurement_active", False)):
+            return True
         seasonal_block = getattr(self, "_seasonal_heating_blocked", None)
         if callable(seasonal_block) and seasonal_block():
+            return True
+        hybrid_allowed = getattr(self, "_season_heat_allowed", None)
+        return callable(hybrid_allowed) and not hybrid_allowed()
+
+    def _request_pac_start(self):
+        if self._pac_start_policy_blocked():
+            self._cancel_pac_start()
             return
         if self.pac_auto_start_pending:
             return
@@ -386,8 +395,7 @@ class SafetyMixin:
 
     def _check_pac_start(self, kwargs):
         self.handle_pac_auto_start = None
-        seasonal_block = getattr(self, "_seasonal_heating_blocked", None)
-        if callable(seasonal_block) and seasonal_block():
+        if self._pac_start_policy_blocked():
             self._cancel_pac_start()
             return
         if not self.pac_auto_start_pending:

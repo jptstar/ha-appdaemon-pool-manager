@@ -1,11 +1,21 @@
 # Changelog
 
-## 0.10.17 - Preserve aged operational temperature across certification expiry
+## 0.10.18 - Thermal stability and October 10 seasonal cutoff
+
+- Integrate the published v0.10.17 hybrid policy without duplicating its persistent closure gate. Change the default cutoff to October 10; explicit installation dates remain authoritative.
+- Stop automatic heating on October 10 for selector-based non-hybrid installations, with manual spring reopening and bounded new Turbo exceptions. A hybrid permanent lock cannot be bypassed by Turbo.
+- Block physical and delayed PAC starts during certified temperature measurements; recover the deadline-1316 regression without cancelling the protected stop.
+- Reuse recent dated samples after known short filtration pauses, retaining temperature age and requiring full calibration after a long or unknown stop.
+- Calculate preservation recharge targets with the expected night loss and hold an authorized recharge through small estimate fluctuations, while respecting manual/night permissions.
 
 - Do not restore an unaged memory-helper temperature when a certified sample expires; continue the operational thermal estimate instead of falsely declaring the pool ready.
 - Keep certification freshness checks and real-measurement learning separate from the operational estimate; preserve actual PAC session timing and net heating gains.
 - Add expiry regression tests and a reproducible replay guard for the six comfort regressions found in the completed v0.10.16 campaign.
-- Preserve all entity IDs, YAML files, heating choices and circulation protections. Validation and remaining limitations are documented in docs/v0.10.17-RELEASE.md.
+- Preserve all entity IDs and circulation protections. Six complete YAML examples remain available. Validation and limitations: docs/v0.10.18-RELEASE.md.
+
+## 0.10.17 - Hybrid Smart end-of-season heating
+
+- Optional reversible weather pause, persistent closure, cold-weather recommendation and 24-hour MPC override. See the published docs/v0.10.17-RELEASE.md.
 
 ## 0.10.16 - Committed comfort recovery and safe PAC circulation
 

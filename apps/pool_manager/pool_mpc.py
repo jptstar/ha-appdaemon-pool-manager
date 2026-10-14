@@ -452,7 +452,7 @@ def _optimize_horizon(
         }
     }
 
-    for index, date_value in enumerate(dates):
+    for date_value in dates:
         swim_day = date_value in swim_dates
         if date_value == today:
             available_day_h = max(0.0, float(today_day_hours_remaining))

@@ -4,7 +4,7 @@
 import datetime
 from datetime import timedelta
 
-from pool_common import *
+from pool_common import TAB_MODE, calcule_temps_filtration_equivalent
 
 
 RESTITUTION_MODE_AUTO = "auto"

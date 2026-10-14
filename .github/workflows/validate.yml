@@ -13,7 +13,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: HACS validation
-        uses: hacs/action@main
+        # hacs/action has no maintained release tags; pin a reviewed main commit.
+        uses: hacs/action@1ebf01c408f29afcb6406bd431bc98fd8cbb15aa  # main 2026-10-14
         with:
           category: appdaemon
 
@@ -26,4 +27,5 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install -r requirements-dev.txt
       - run: python -m py_compile apps/pool_manager/*.py
+      - run: ruff check .
       - run: pytest -q

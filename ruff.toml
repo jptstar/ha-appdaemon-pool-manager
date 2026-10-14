@@ -1,0 +1,13 @@
+# Lint gate kept intentionally narrow: real defects only (syntax, pyflakes,
+# bugbear). Style and complexity are reported, not enforced, for now.
+target-version = "py312"
+
+[lint]
+select = ["E9", "F", "B"]
+ignore = [
+    "B905",  # zip() strict= would change runtime behavior on uneven inputs
+]
+
+[lint.per-file-ignores]
+# Offline simulation tools build closures evaluated immediately in the loop.
+"tools/*" = ["B023"]

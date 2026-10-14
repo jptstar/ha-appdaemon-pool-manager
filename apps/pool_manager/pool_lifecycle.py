@@ -4,7 +4,7 @@
 import datetime
 from datetime import timedelta
 
-from pool_common import *
+from pool_common import JOURNAL, TAB_MODE, heure_to_timedelta
 from pool_journal import pool_operating_mode_transition
 
 class LifecycleMixin:

@@ -5,7 +5,6 @@ Pure mocked I/O: no real pump, climate entity or HA service is actuated.
 import datetime
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 

@@ -23,6 +23,7 @@ jobs:
         run: |
           python -m pip install -r requirements-dev.txt
           python -m py_compile apps/pool_manager/*.py
+          ruff check .
           pytest -q
 
       - name: Publish or update GitHub release

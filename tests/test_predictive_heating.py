@@ -365,7 +365,6 @@ def test_unrecoverable_today_is_skipped():
     )
     very_slow = {
         "smart": {"20_25": {"rate": 0.10, "count": 30}},
-        "turbo": {"20_25": {"rate": 0.15, "count": 30}},
         "turbo": {
             "20_25": {"rate": 0.15, "count": 30},
             "15_20": {"rate": 0.15, "count": 30},

@@ -4,7 +4,7 @@
 import datetime
 from datetime import timedelta
 
-from pool_common import *
+from pool_common import heure_to_timedelta
 
 class StrategyMixin:
 

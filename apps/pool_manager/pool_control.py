@@ -2,9 +2,13 @@
 # Copyright (C) 2026 jptstar
 
 import datetime
-from datetime import timedelta
 
-from pool_common import *
+from pool_common import (
+    TAB_MODE,
+    calcule_objectif_filtration,
+    calcule_plage_filtration,
+    heure_to_timedelta,
+)
 
 
 def forecast_filtration_target(current, water, coefficient, curve, plan, planned_at, now):

@@ -3,7 +3,9 @@
 
 import hassapi as hass
 
-from pool_common import *
+# Public compatibility surface: tools/tests load filtration math through
+# this entry point, so pool_common helpers stay re-exported here.
+from pool_common import *  # noqa: F403
 from pool_runtime_stability import RuntimeStabilityMixin
 from pool_status import StatusMixin
 from pool_heating import HeatingModeMixin

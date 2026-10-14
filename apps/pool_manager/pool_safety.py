@@ -9,9 +9,10 @@ from pool_common import TAB_MODE, heure_to_timedelta
 
 
 def decide_hors_gel_continu(temp_ext, actif, mode, seuil_on=1.0, seuil_off=3.0):
-    """Hysteretic continuous freeze protection decision."""
-    if mode == TAB_MODE[4]:
-        return False
+    """Hysteretic continuous freeze protection decision.
+
+    Freeze protection has priority over every mode, forced stop included.
+    """
     if temp_ext is None:
         return mode in [None, "", TAB_MODE[2]] or bool(actif)
     temp_ext = float(temp_ext)
@@ -255,7 +256,7 @@ class SafetyMixin:
     def rebrassage_hors_gel(self, kwargs):
         mode = self._mode()
         active, temp = self._freeze_state(mode)
-        if active and mode != TAB_MODE[4]:
+        if active:
             self._apply_freeze_continuous(temp)
             return
         return self._rebrassage_hors_gel_core(kwargs)
@@ -690,7 +691,12 @@ class SafetyMixin:
         if mode == TAB_MODE[4] or self.arret_force_actif():
             if self.gestion_pac_auto or self._pac_power_active():
                 self._pac_off("arrêt forcé", post=False)
-            self.hors_gel_continu_active = False
+            # Freeze protection has priority over a forced stop: the pump is
+            # only run for the antifreeze circulation, never for filtration.
+            active, temp = self._freeze_state(mode)
+            if active:
+                self._apply_freeze_continuous(temp)
+                return
             self._release_freeze(mode)
             return self._traitement_filtration(kwargs)
 

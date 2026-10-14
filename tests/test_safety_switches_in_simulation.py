@@ -22,3 +22,11 @@ def test_forced_stop_entity_stops_pump_and_pac_in_every_mode(index):
 
 def test_antifreeze_mixing_runs_in_hors_gel_mode():
     assert check_frost_protection.run_cases(4) == []
+
+
+@pytest.mark.parametrize("index", range(10))
+def test_continuous_freeze_protection_overrides_forced_stop(index):
+    # 5 modes x (switch off / on): the circulation must run in every mode,
+    # including the Arrêt Forcé selector and the forced-stop switch.
+    row = check_forced_stop_entity.check_frost_priority(index)
+    assert row["bad_steps"] == 0, row

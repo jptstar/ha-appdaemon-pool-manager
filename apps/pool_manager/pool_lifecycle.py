@@ -331,7 +331,7 @@ class LifecycleMixin:
             self.prochain_bras = None
 
         if new_mode == TAB_MODE[2]:
-            if not ("arret_force" in self.args and self.get_state(self.args["arret_force"]) == "on"):
+            if not self.arret_force_actif():
                 self.planifier_bras(0)
 
         self.sync_local_panel_policy(new_mode)
@@ -362,7 +362,7 @@ class LifecycleMixin:
             self.traitement(kwargs)
             return
 
-        if "arret_force" in self.args and self.get_state(self.args["arret_force"]) == "on":
+        if self.arret_force_actif():
             return
 
         if self.brassage_en_cours:
@@ -384,6 +384,10 @@ class LifecycleMixin:
 
     def change_arret_force(self, entity, attribute, old, new, kwargs):
         self.sync_local_panel_policy()
+        if new == "on" and not self.arret_force_actif():
+            # Hors Gel keeps priority over the forced-stop switch.
+            self.traitement(kwargs)
+            return
         if new == "on":
             self.turn_off_pompe_mem(force=True)
             self.stabilisation_active = False
@@ -407,6 +411,8 @@ class LifecycleMixin:
             self.lock_text = True
             self.set_messages("Arrêt forcé", "")
             self.set_debug_w("")
+            # Continuous freeze protection, when needed, restarts the circulation.
+            self.traitement(kwargs)
 
         elif new == "off":
             self.lock_text = False
@@ -546,7 +552,7 @@ class LifecycleMixin:
             self.prochain_bras = None
             return
 
-        if "arret_force" in self.args and self.get_state(self.args["arret_force"]) == "on":
+        if self.arret_force_actif():
             return
 
         maintenant = datetime.datetime.now()

@@ -40,8 +40,37 @@ def test_missing_mode_and_missing_temperature_falls_back_to_freeze_safety():
     assert decide_hors_gel_continu(None, False, None, 1.0, 3.0) is True
 
 
-def test_forced_stop_remains_highest_priority_even_below_zero():
-    assert decide_hors_gel_continu(-5.0, True, TAB_MODE[4], 1.0, 3.0) is False
+def test_freeze_protection_has_priority_over_forced_stop_mode():
+    assert decide_hors_gel_continu(-5.0, False, TAB_MODE[4], 1.0, 3.0) is True
+    assert decide_hors_gel_continu(0.5, False, TAB_MODE[4], 1.0, 3.0) is True
+    # Hysteresis is unchanged: no freeze above the release threshold.
+    assert decide_hors_gel_continu(5.0, True, TAB_MODE[4], 1.0, 3.0) is False
+    assert decide_hors_gel_continu(2.0, False, TAB_MODE[4], 1.0, 3.0) is False
+
+
+def _forced_stop_probe(mode, switch):
+    from pool_devices import DevicesMixin
+
+    class Probe(DevicesMixin):
+        args = {"arret_force": "switch.stop", "mode_de_fonctionnement": "select.mode"}
+
+        def get_state(self, entity):
+            return {"switch.stop": switch, "select.mode": mode}[entity]
+
+    return Probe().arret_force_actif()
+
+
+def test_forced_stop_definition_gives_way_to_hors_gel_only():
+    # The switch stops every mode except Hors Gel, where freeze protection wins.
+    assert _forced_stop_probe(TAB_MODE[1], "on") is True
+    assert _forced_stop_probe(TAB_MODE[0], "on") is True
+    assert _forced_stop_probe(TAB_MODE[3], "on") is True
+    assert _forced_stop_probe(TAB_MODE[2], "on") is False
+    assert _forced_stop_probe(TAB_MODE[2], "off") is False
+    # The Arrêt Forcé selector keeps stopping filtration (only continuous
+    # freeze protection, decided separately, can override it).
+    assert _forced_stop_probe(TAB_MODE[4], "off") is True
+    assert _forced_stop_probe(TAB_MODE[4], "on") is True
 
 
 def test_pac_start_requires_all_three_warm_conditions():

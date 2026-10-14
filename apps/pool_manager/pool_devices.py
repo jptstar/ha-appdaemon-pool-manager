@@ -470,9 +470,11 @@ class DevicesMixin:
         return True
 
     def arret_force_actif(self):
-        if "arret_force" in self.args and self.get_state(self.args["arret_force"]) == "on":
-            return True
         mode = (self.get_state(self.args["mode_de_fonctionnement"]) or "").strip()
+        if "arret_force" in self.args and self.get_state(self.args["arret_force"]) == "on":
+            # Freeze protection has priority: in Hors Gel mode the forced-stop
+            # switch does not stop the antifreeze circulation.
+            return mode != TAB_MODE[2]
         return mode == TAB_MODE[4]
 
     def get_consigne_electrolyseur_volet_ouvert(self):

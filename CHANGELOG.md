@@ -2,9 +2,10 @@
 
 ## 0.10.19 - Safety-loop isolation and code hygiene (unreleased, depends on 0.10.18)
 
-- Isolate the safety loop stages (PAC flow protection, PAC auto policy, filtration loop). Each stage has its own fault key, logs a full traceback on its first failure and is recovered on success. A PAC-side error can no longer skip pump control (flow, quota, freeze protection), and a recurring failure is no longer silenced after the first one.
+- Isolate the safety loop stages (PAC flow protection, PAC auto policy, filtration pass). Each stage has its own fault key, logs a full traceback on its first failure and is recovered on success, so a recurring failure is no longer silenced after the first one and a recovery is reported. A PAC-side error no longer skips the safety tick's own filtration pass; filtration is also driven by an independent periodic timer, so this mainly improves visibility and recovery rather than preventing a pump freeze.
 - Split the 1000-line `_traitement_filtration` into one method per mode, with no intended behavior change; the daytime catch-up rule of 0.10.18 is carried over to the running-pump deficit path.
 - Replace wildcard imports with explicit ones, remove two unused computations, add a `ruff` gate (E9/F/B) to the validate and release workflows and pin `hacs/action` to a reviewed commit.
+- Validation tooling: campaign heartbeat/pid and `tools/campaign_status.py` liveness check, risk-first scheduling and `--fail-fast` for the matrix runner, and a seeded boundary-biased fuzz campaign (`tools/run_fuzz_campaign.py`) with determinism and fault-isolation oracles.
 - Preserve all entity IDs and the six YAML examples. Validation and limitations: docs/v0.10.19-RELEASE.md.
 
 ## 0.10.18 - Thermal stability and October 10 seasonal cutoff

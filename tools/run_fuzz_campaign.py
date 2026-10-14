@@ -62,6 +62,11 @@ def make_case(seed, index):
             event['choice'] = rng.choice(['eco', 'night', 'skip', 'smart'])
         else:
             event['heating'] = rng.choice(DOMAINS['heating'][:3])
+            if case['heating'] == 'Désactivé':
+                # The simulator's disabled-heating oracle reads the initial
+                # setting only; re-enabling heating mid-run is legitimate.
+                del event['heating']
+                event['choice'] = 'eco'
         events.append(event)
     if events:
         case['decision_events'] = events

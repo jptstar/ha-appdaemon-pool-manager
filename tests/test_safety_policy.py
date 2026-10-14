@@ -283,3 +283,54 @@ def test_hvac_off_with_residual_pac_power_starts_post_circulation():
     assert app.handle_pac_post_circulation == "post"
     assert app.pac_post_circulation_until is not None
     assert ("flow",) in app.calls
+
+
+def _tick_app(steps):
+    app = make_safety_app({})
+    messages = []
+    app.log = lambda message, **kwargs: messages.append(message)
+    calls = []
+
+    def stage(name):
+        def run(*_args):
+            calls.append(name)
+            outcome = steps[name].pop(0) if steps[name] else None
+            if isinstance(outcome, Exception):
+                raise outcome
+        return run
+
+    app._protect_pac_flow = stage("flow")
+    app._manage_pac_auto = stage("auto")
+    app.traitement = stage("filtration")
+    return app, calls, messages
+
+
+def test_pac_policy_error_does_not_block_filtration_loop():
+    app, calls, _ = _tick_app({"flow": [], "auto": [RuntimeError("boom")], "filtration": []})
+    app.safety_tick({})
+    assert calls == ["flow", "auto", "filtration"]
+    assert "safety_tick_pac_auto" in app._safety_faults
+    assert "safety_tick" not in app._safety_faults
+
+
+def test_flow_protection_error_skips_pac_policy_but_keeps_filtration():
+    app, calls, _ = _tick_app({"flow": [RuntimeError("flow")], "auto": [], "filtration": []})
+    app.safety_tick({})
+    assert calls == ["flow", "filtration"]
+    assert "safety_tick_pac_flow" in app._safety_faults
+
+
+def test_safety_tick_fault_recovers_and_reports_a_later_failure_again():
+    app, _, messages = _tick_app({
+        "flow": [],
+        "auto": [],
+        "filtration": [RuntimeError("first"), None, RuntimeError("second")],
+    })
+    app.safety_tick({})
+    assert "safety_tick" in app._safety_faults
+    app.safety_tick({})
+    assert "safety_tick" not in app._safety_faults
+    app.safety_tick({})
+    assert any("first" in message for message in messages)
+    assert any("second" in message for message in messages)
+    assert any(message.startswith("Trace") for message in messages)

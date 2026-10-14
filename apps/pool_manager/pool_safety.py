@@ -2,6 +2,7 @@
 # Copyright (C) 2026 jptstar
 
 import datetime
+import traceback
 from datetime import timedelta
 
 from pool_common import TAB_MODE, heure_to_timedelta
@@ -638,13 +639,42 @@ class SafetyMixin:
     def safety_input_changed(self, entity, attribute, old, new, kwargs):
         self.safety_tick({})
 
-    def safety_tick(self, kwargs):
+    def _run_safety_step(self, key, label, step):
+        """Run one safety-loop stage, reporting failures once and recoveries.
+
+        Each stage has its own fault key so a failure in one stage neither
+        hides later, different failures nor stays latched after recovery.
+        """
         try:
-            self._protect_pac_flow()
-            self._manage_pac_auto()
-            self.traitement({})
+            step()
         except Exception as exc:
-            self._fault("safety_tick", f"erreur boucle sécurité: {exc}")
+            if key not in self._safety_faults:
+                try:
+                    self.log(
+                        f"Trace {label}:\n{traceback.format_exc()}",
+                        level="ERROR",
+                        log="piscine_log",
+                    )
+                except Exception:
+                    pass
+            self._fault(key, f"erreur {label}: {exc}")
+            return False
+        self._recover(key, f"{label} rétablie")
+        return True
+
+    def safety_tick(self, kwargs):
+        # The PAC policy only runs when flow protection itself succeeded, but
+        # the filtration loop always runs: a PAC-side error must never freeze
+        # pump control (flow, quota, freeze protection).
+        if self._run_safety_step(
+            "safety_tick_pac_flow", "protection débit PAC", self._protect_pac_flow
+        ):
+            self._run_safety_step(
+                "safety_tick_pac_auto", "politique PAC auto", self._manage_pac_auto
+            )
+        self._run_safety_step(
+            "safety_tick", "boucle sécurité", lambda: self.traitement({})
+        )
 
     def traitement(self, kwargs):
         mode = self._mode()

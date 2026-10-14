@@ -825,12 +825,6 @@ def _candidate_plan(
             night_air,
             learned_model=heating_model,
         )
-        turbo_night_rate = estimate_heating_rate(
-            base_rate,
-            turbo_preset,
-            night_air,
-            learned_model=heating_model,
-        )
         smart_night_capacity = smart_night_rate * max(0.0, float(night_hours))
         night_required_c = remaining_after_day
         if remaining_after_day > smart_night_capacity + stop_margin:

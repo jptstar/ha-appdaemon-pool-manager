@@ -282,7 +282,6 @@ class ControlMixin:
 
             en_plage_solaire = self.est_dans_plage(self.heure_debut_solaire, self.heure_fin_solaire)
             en_plage_rattrapage_soir = self.est_dans_plage(self.heure_fin_solaire, self.heure_fin_rattrapage)
-            encore_dans_plage_temperature = h_debut <= h_maintenant <= h_fin
 
             pompe_on = self.pompe_est_on()
             pac_ok = self.pac_autorisee() is True

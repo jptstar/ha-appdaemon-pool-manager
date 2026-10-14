@@ -25,12 +25,10 @@ def episodes(trace):
     return count
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--cases', type=int, default=24)
-    args = parser.parse_args()
+def run_cases(count):
+    """Return the failing rows (empty when the antifreeze mixing works)."""
     rows = []
-    for index in range(args.cases):
+    for index in range(count):
         job = make_case('frost', index)
         case = dict(job['case'], mode='Hors Gel', weather='freeze', fault='none', heating='Désactivé')
         case.pop('decision_events', None)
@@ -40,8 +38,15 @@ def main():
         seen = episodes(result['trace'])
         rows.append(dict(index=index, expected=round(expected, 1), episodes=seen, ok=seen >= expected/2,
                          violations=result['violations']))
-    failed = [r for r in rows if not r['ok']]
-    print(json.dumps(dict(cases=len(rows), failed=len(failed), examples=failed[:5])))
+    return [row for row in rows if not row['ok']]
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--cases', type=int, default=24)
+    args = parser.parse_args()
+    failed = run_cases(args.cases)
+    print(json.dumps(dict(cases=args.cases, failed=len(failed), examples=failed[:5])))
     return 1 if failed else 0
 
 

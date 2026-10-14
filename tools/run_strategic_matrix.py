@@ -11,13 +11,27 @@ import hashlib
 import itertools
 import json
 import multiprocessing
+import os
 from pathlib import Path
 import random
+import signal
 import sys
 import time
 
 from simulate_pool import DOMAINS, ROOT, pairwise_cases, simulate
 from run_full_matrix import atomic_json, fingerprint
+
+# Groups most likely to expose a control defect run first, so that a defect
+# surfaces in minutes instead of hours. Order only affects scheduling: the
+# manifest, job set and per-job results are unchanged.
+RISK_FIRST = ['regression', 'trajectory', 'weather-cover-permission-fault', 'turbo-expiry',
+              'deadline', 'decision-change', 'temperature-boundary', 'pac-filtration-energy']
+
+
+def risk_rank(job):
+    group = job.get('group', job['id'].split('-')[0])
+    return RISK_FIRST.index(group) if group in RISK_FIRST else len(RISK_FIRST)
+
 
 TRIPLES = [
     ('weather', 'water', 'choice'),
@@ -106,6 +120,10 @@ def main():
     parser.add_argument('--workers', type=int, default=4)
     parser.add_argument('--catalogue-only', action='store_true')
     parser.add_argument('--profile', choices=['quick','balanced'], default='quick')
+    parser.add_argument('--risk-first', action='store_true',
+                        help='schedule risky groups first (does not change the manifest)')
+    parser.add_argument('--fail-fast', action='store_true',
+                        help='stop after the first batch containing a control violation')
     args = parser.parse_args()
     if not 1 <= args.workers <= 4:
         parser.error('workers 1..4')
@@ -161,6 +179,7 @@ def main():
         count = len(completed)
         rate = (count-initial)/elapsed if elapsed else 0
         data = dict(state=state, updated_at_utc=dt.datetime.now(dt.timezone.utc).isoformat(),
+            pid=os.getpid(), risk_first=args.risk_first, fail_fast=args.fail_fast,
             completed=count, total=len(selected), failed_cases=sum(bool(r['violations']) for r in completed.values()),
             comfort_deficit_cases=sum((r.get('comfort_deficit_c') or 0)>0 for r in completed.values()),
             session_elapsed_seconds=round(elapsed,2), exhaustive=False,
@@ -172,21 +191,37 @@ def main():
             for group in sorted({job.get('group',job['id'].split('-')[0]) for job in selected})}
         atomic_json(args.output/'progress.json', data)
         return data
+    pending = [job for job in selected if job['id'] not in completed]
+    if args.risk_first:
+        pending.sort(key=risk_rank)  # stable: order inside a group is kept
+    remaining = iter(pending)
+
+    # SIGTERM/SIGINT must leave an honest state; SIGKILL cannot be caught, so
+    # progress.json also carries the pid for an external liveness check.
+    def on_signal(signum, frame):
+        raise KeyboardInterrupt(f'signal {signum}')
+    signal.signal(signal.SIGTERM, on_signal)
     progress('running')
-    remaining = iter(job for job in selected if job['id'] not in completed)
     # Only one batch per worker is queued. This avoids a costly unbounded queue
     # and checks source immutability between batches.
-    with ProcessPoolExecutor(max_workers=args.workers,
-            mp_context=multiprocessing.get_context('spawn'), max_tasks_per_child=100) as pool:
-        with result_path.open('a') as stream:
-            while batch := list(itertools.islice(remaining, args.workers)):
-                if source_hash() != source:
-                    progress('stopped_source_changed')
-                    return 1
-                for result in pool.map(run_job, batch):
-                    stream.write(json.dumps(result, ensure_ascii=False)+'\n'); stream.flush()
-                    completed[result['id']] = {key:value for key,value in result.items() if key != 'trace'}
-                    print(json.dumps(progress('running')), flush=True)
+    try:
+        with ProcessPoolExecutor(max_workers=args.workers,
+                mp_context=multiprocessing.get_context('spawn'), max_tasks_per_child=100) as pool:
+            with result_path.open('a') as stream:
+                while batch := list(itertools.islice(remaining, args.workers)):
+                    if source_hash() != source:
+                        progress('stopped_source_changed')
+                        return 1
+                    for result in pool.map(run_job, batch):
+                        stream.write(json.dumps(result, ensure_ascii=False)+'\n'); stream.flush()
+                        completed[result['id']] = {key:value for key,value in result.items() if key != 'trace'}
+                        print(json.dumps(progress('running')), flush=True)
+                    if args.fail_fast and any(completed[job['id']]['violations'] for job in batch):
+                        progress('stopped_violation')
+                        return 1
+    except BaseException:
+        progress('interrupted')
+        raise
     summary = progress('complete')
     atomic_json(args.output/'summary.json', summary)
     return bool(summary['failed_cases'])

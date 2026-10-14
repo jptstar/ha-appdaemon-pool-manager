@@ -523,6 +523,26 @@ class ControlMixin:
                         self.format_texte_solaire_debug(vitesse_appliquee, surplus_net, reseau_net, pv_power)
                         return
 
+                    if vitesse_rattrapage_dyn is not None:
+                        # The off->on branch already authorizes daytime
+                        # catch-up without surplus. Apply that SAME policy
+                        # while running, instead of stopping after calibration
+                        # and restarting ten minutes later (history-3).
+                        self.debut_manque_soleil = None
+                        self.reset_pid()
+                        vitesse = max(vitesse_rattrapage_dyn, self.vitesse_min_filtration_utile)
+                        vitesse = self.limite_vitesse_surplus_fragile(
+                            vitesse, pac_chauffe=False, pac_prioritaire=False, rattrapage=True,
+                        )
+                        vitesse_appliquee = self.set_pump_percentage(vitesse)
+                        short_msg, detail_msg = self.split_message_solaire(
+                            "Rattrapage de jour", vitesse_appliquee, filtre_temps_eq,
+                            objectif_temps_eq, extra="quota en retard; réseau autorisé",
+                        )
+                        self.set_messages(short_msg, detail_msg)
+                        self.format_texte_solaire_debug(vitesse_appliquee, surplus_net, reseau_net, pv_power)
+                        return
+
                     if duree_manque >= tempo_anti_coupure_active:
                         self.turn_off_pompe_mem(
                             reason=(

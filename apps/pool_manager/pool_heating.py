@@ -111,6 +111,7 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         self.chauffage_start_label = None
         self.handle_turbo_fallback = None
         self.chauffage_turbo_ends_at = None
+        self._chauffage_heat_owned = False
 
         if self.entity_chauffage:
             self.listen_state(self.change_chauffage_mode, self.entity_chauffage)
@@ -612,6 +613,7 @@ class HeatingModeMixin(PredictiveHeatingSupport):
                 )
                 self._pac_mark_started()
             self._set_pac_preset(preset)
+            self._chauffage_heat_owned = True
             self._recover("pac_climate")
             return True
         except Exception as exc:
@@ -761,6 +763,12 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         if not self.entity_chauffage:
             return self._manage_pac_saisonnier()
 
+        # Safety paths can bypass the planner; invalidate its old offer too.
+        pending = getattr(self, "_pool_pending", None)
+        decision_blocked = getattr(self, "_pool_decision_blocked", None)
+        if pending and callable(decision_blocked) and decision_blocked():
+            self._publish_pool_decision()
+
         if self._seasonal_heating_blocked():
             self.chauffage_predictif_heat_requested = False
             self.chauffage_predictif_heat_target_c = None
@@ -834,18 +842,25 @@ class HeatingModeMixin(PredictiveHeatingSupport):
             self._update_predictive_diagnostics(kind, override="🔥 Turbo")
             return self._request_chauffage_start(self.chauffage_preset_turbo, "Turbo")
 
+        if kind == "auto" and not self.gestion_pac_auto:
+            self.chauffage_predictif_heat_requested = False
+            self.chauffage_predictif_heat_target_c = None
+            self._cancel_chauffage_start()
+            self._cancel_pac_start()
+            # Release only a heat request owned by this controller. Do not
+            # stop an unrelated external PAC merely because Auto is unmanaged.
+            if getattr(self, "_chauffage_heat_owned", False):
+                self._pac_off("fin du pilotage chauffage", respect_min_on=True)
+            self._update_predictive_diagnostics(kind, override="⏸ Auto PAC non piloté")
+            return
+
         if self.chauffage_predictif and kind in {"auto", "end_season"}:
             if kind == "auto":
-                if not self.gestion_pac_auto:
-                    self.chauffage_predictif_heat_requested = False
-                    self._cancel_chauffage_start()
-                    self._update_predictive_diagnostics(
-                        kind, override="⏸ Auto PAC non piloté"
-                    )
-                    return
                 if hasattr(self, "mode_auto_autorise") and not self.mode_auto_autorise():
                     self.chauffage_predictif_heat_requested = False
                     self._cancel_chauffage_start()
+                    if getattr(self, "_chauffage_heat_owned", False):
+                        self._pac_off("automatique suspendu", respect_min_on=True)
                     self._update_predictive_diagnostics(
                         kind, override="⏸ Automatique suspendu"
                     )
@@ -892,6 +907,8 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         # itself may deliberately remain off during the 70% / 15-minute mixing
         # cycle. Reuse the existing pump-demand path instead of creating a
         # second hydraulic control loop.
+        if getattr(self, "_chauffage_heat_owned", False) and self._pac_state() == "heat":
+            return True
         if getattr(self, "chauffage_fin_saison_hybride", False):
             if not self._season_heat_allowed():
                 return False

@@ -68,6 +68,38 @@ def night_plan():
     }
 
 
+def test_pending_night_prompt_is_removed_when_pool_is_forced_off():
+    """History-3: the dashboard must not retain a night offer after a stop."""
+    app = App()
+    app._apply_pool_decision(night_plan(), 23, 31)
+    assert app._pool_pending is not None
+    app.stopped = True
+    app._publish_pool_decision()
+    assert app._pool_pending is None
+    assert app.states[-1]["state"] == "Aucune demande"
+    assert "night" not in app.states[-1]["attributes"]
+
+
+def test_pending_night_prompt_is_removed_when_heating_is_disabled():
+    app = App()
+    app._apply_pool_decision(night_plan(), 23, 31)
+    assert app._pool_pending is not None
+    app.mode = "Désactivé"
+    app._publish_pool_decision()
+    assert app._pool_pending is None
+    assert app.states[-1]["state"] == "Aucune demande"
+
+
+def test_forced_stop_does_not_accept_new_dashboard_night_permission():
+    app = App()
+    app.stopped = True
+    app._pool_manual_decision_changed(
+        "input_select.decision", None, "Suivre le plan Smart", "Autoriser cette nuit", {},
+    )
+    assert app._pool_decision_choice is None
+    assert app._pool_pending is None
+
+
 def test_no_reply_is_smart_and_single_notice():
     app = App()
     assert request(app)["preset"] == "Smart"

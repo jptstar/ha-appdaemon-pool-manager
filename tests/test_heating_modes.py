@@ -23,6 +23,33 @@ def test_selector_modes_are_classified():
     assert module.chauffage_mode_kind("unexpected") == "unknown"
 
 
+@pytest.mark.parametrize("owned", [False, True])
+def test_unmanaged_auto_releases_only_controller_owned_heat(owned):
+    app = object.__new__(module.HeatingModeMixin)
+    app.entity_chauffage = "input_select.pool_heating"
+    app.gestion_pac_auto = False
+    app.chauffage_predictif = True
+    app._chauffage_heat_owned = owned
+    app._seasonal_heating_blocked = lambda: False
+    app.chauffage_mode = lambda: "Automatique"
+    app._season_locked = lambda kind: False
+    app._update_predictive_learning = lambda: None
+    app._recover = lambda *args: None
+    app._mode = lambda: "Intelligent"
+    app.arret_force_actif = lambda: False
+    app._cancel_chauffage_start = lambda: None
+    app._cancel_pac_start = lambda: None
+    app._update_predictive_diagnostics = lambda *args, **kwargs: None
+    calls = []
+    app._pac_off = lambda *args, **kwargs: calls.append(kwargs) or False
+    app._pac_state = lambda: "heat"
+    app._manage_pac_auto()
+    assert len(calls) == int(owned)
+    if owned:
+        assert calls[0]["respect_min_on"] is True
+        assert app._pac_circulation_chauffage_requise() is True
+
+
 @pytest.mark.parametrize("day,expected", [(9, False), (10, True), (13, True)])
 def test_seasonal_cutoff_local_boundary(day, expected):
     assert module.seasonal_cutoff_reached(module.datetime.datetime(2026, 10, day)) is expected

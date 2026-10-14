@@ -3,6 +3,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 
 MODULE_DIR = Path(__file__).parents[1] / "apps" / "pool_manager"
 sys.path.insert(0, str(MODULE_DIR))
@@ -135,6 +137,80 @@ def test_long_stop_still_requires_full_calibration(tmp_path):
     app.last_pompe_on = now
     app._update_certified_measurement(now)
     assert app.chauffage_predictif_measurement_active
+
+
+def test_repeated_short_energy_pauses_do_not_recalibrate_every_restart(tmp_path):
+    """Sequence guard, not just a single favourable restart.
+
+    Twelve 21-minute runs separated by 10-minute pauses approximate the
+    history-3 loop. Refreshes remain allowed when the sample ages out.
+    """
+    app = _make_runtime(tmp_path)
+    origin = datetime.datetime(2026, 10, 14, 8)
+    app.chauffage_predictif_certified_at = origin - datetime.timedelta(minutes=20)
+    app.chauffage_predictif_certified_water_c = app.water
+    calibrations = 0
+    reuses = 0
+    for cycle in range(12):
+        start = origin + datetime.timedelta(minutes=31 * cycle)
+        app.last_pompe_off = start - datetime.timedelta(minutes=10)
+        app.last_pompe_on = start
+        previous_at = app.chauffage_predictif_certified_at
+        app._update_certified_measurement(start)
+        if app.chauffage_predictif_measurement_active:
+            calibrations += 1
+            for minute in range(1, 22):
+                app._update_certified_measurement(start + datetime.timedelta(minutes=minute))
+            assert not app.chauffage_predictif_measurement_active
+            assert app.chauffage_predictif_certified_at > previous_at
+        else:
+            reuses += 1
+            assert app.chauffage_predictif_certified_at == previous_at
+    assert calibrations <= 6
+    assert reuses >= 6
+
+
+def test_forced_stop_diagnostics_do_not_publish_an_active_heat_plan(tmp_path):
+    app = _make_runtime(tmp_path)
+    app.arret_force_actif = lambda: True
+    app._refresh_predictive_forecast = lambda: []
+    app._predictive_water_temperature = lambda: 23.0
+    app._pac_target_temperature = lambda: 31.0
+    app._build_runtime_predictive_plan = lambda *args: {
+        "should_heat": True, "action": "PRESERVE", "night_heating": True,
+        "heat_target_c": 23.5,
+    }
+    published = []
+    app._publish_predictive_status = lambda **kwargs: published.append(kwargs)
+    app._update_predictive_diagnostics("end_season", override="⛔ Sécurité piscine")
+    assert published
+    assert published[-1]["plan"]["should_heat"] is False
+    assert published[-1]["plan"]["night_heating"] is False
+
+
+@pytest.mark.parametrize("planned,measured", [(True, False), (False, True), (True, True)])
+def test_heating_display_uses_measured_activity_not_recommendation(tmp_path, planned, measured):
+    app = _make_runtime(tmp_path)
+    app.entity_chauffage_predictif_status = "sensor.predictive"
+    app.chauffage_predictif_mpc = False
+    app.chauffage_predictif_horizon_jours = 3
+    app.chauffage_predictif_forecast_at = None
+    app.chauffage_predictif_last_status_signature = None
+    app.pac_active = measured
+    app._publish_predictive_score = lambda plan: None
+    app._measurement_progress = lambda now: (0, 0, "idle")
+    app._forced_heating_timer_progress = lambda now: (None, None)
+    app._predictive_expected_night_cover_state = lambda: "closed"
+    app._predictive_status_state = lambda *args, **kwargs: "Diagnostic"
+    app._recover = lambda *args: None
+    app._fault = lambda *args: pytest.fail(str(args))
+    published = []
+    app.set_state = lambda entity, **kwargs: published.append(kwargs)
+    app._publish_predictive_status(
+        plan={"should_heat": planned}, forecast=[], kind="end_season", water=23, target=31,
+    )
+    assert published[-1]["attributes"]["heating_now"] is measured
+    assert published[-1]["attributes"]["heating_planned"] is planned
 
 
 def test_predictive_plan_journal_ignores_trajectory_micro_adjustments(tmp_path):

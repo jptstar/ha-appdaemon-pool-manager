@@ -107,6 +107,10 @@ class DecisionSupport:
         choice = choices.get(new)
         if choice is None:
             return
+        if choice == "night" and self._pool_decision_blocked():
+            self._pool_pending = None
+            self._publish_pool_decision()
+            return
         self._pool_pending = None
         self._pool_decision_day = now.date()
         self._pool_decision_choice = choice
@@ -143,9 +147,33 @@ class DecisionSupport:
             now.date() + datetime.timedelta(days=1), datetime.time()
         )
 
+    def _pool_decision_blocked(self):
+        """A proposal is not a permit; recheck the current policy on display/action."""
+        if self.arret_force_actif():
+            return True
+        entity = getattr(self, "entity_chauffage", None)
+        if not entity:
+            # Optional selector: preserve the legacy predictive-only contract.
+            return False
+        mode = str(self.get_state(entity) or "").strip() if entity else ""
+        if mode not in {"Automatique", "Fin de saison • Smart"}:
+            return True
+        if mode == "Automatique" and not getattr(self, "gestion_pac_auto", True):
+            return True
+        for name in ("_seasonal_heating_blocked", "_season_locked"):
+            gate = getattr(self, name, None)
+            if callable(gate) and gate():
+                return True
+        allowed = getattr(self, "_chauffage_pool_mode_autorise", None)
+        return callable(allowed) and not allowed()
+
     def _publish_pool_decision(self):
         pending = getattr(self, "_pool_pending", None)
-        if pending and datetime.datetime.now() >= pending["expires"]:
+        if pending and (
+            datetime.datetime.now() >= pending["expires"]
+            or self._pool_decision_blocked()
+            or self.get_state(self.entity_chauffage) != pending["mode"]
+        ):
             self._pool_pending = pending = None
         attributes = {
             "friendly_name": "Piscine • Confirmation chauffage",
@@ -210,8 +238,10 @@ class DecisionSupport:
         self._pool_pending = None
         entity = getattr(self, "entity_chauffage", None)
         if not entity or self.get_state(entity) != pending["mode"]:
+            self._publish_pool_decision()
             return
-        if self.arret_force_actif():
+        if self._pool_decision_blocked():
+            self._publish_pool_decision()
             return
         if choice == "turbo":
             try:
@@ -247,6 +277,12 @@ class DecisionSupport:
 
     def _apply_pool_decision(self, plan, water, target, now=None, economy_plan=None):
         now = now or datetime.datetime.now()
+        if self._pool_decision_blocked():
+            self._pool_pending = None
+            self._publish_pool_decision()
+            return dict(plan, should_heat=False, night_heating=False,
+                        decision_required=False, action="WAIT", heat_target_c=None,
+                        reason="chauffage non autorisé par la politique actuelle")
         if str(self.args.get("pool_confirmation_enabled", "true")).lower() != "true":
             return plan
         plan = dict(plan)

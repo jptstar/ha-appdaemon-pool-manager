@@ -508,6 +508,7 @@ class SafetyMixin:
             return False
         self._recover("pac_climate")
         if state == "off":
+            self._chauffage_heat_owned = False
             self.pac_deferred_stop_reason = None
             # Some PACs expose HVAC off before their compressor power has
             # actually fallen. Preserve circulation for that physical tail.
@@ -536,6 +537,7 @@ class SafetyMixin:
         try:
             self.call_service("climate/set_hvac_mode", entity_id=self.entity_pac_climate, hvac_mode="off")
             self._pac_mark_stopped()
+            self._chauffage_heat_owned = False
             self.log(f"PAC auto: arrêt ({reason})", log="piscine_log")
         except Exception as exc:
             self._fault("pac_stop", f"échec arrêt PAC: {exc}")

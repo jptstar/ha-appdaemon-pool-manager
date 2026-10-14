@@ -2231,7 +2231,9 @@ class PredictiveHeatingSupport(DecisionSupport):
             "trajectory_target_temperature": (plan or {}).get(
                 "trajectory_target_c"
             ),
-            "heating_now": bool((plan or {}).get("should_heat")),
+            # A recommendation is not a running compressor (history-3).
+            "heating_now": bool(self._pac_power_active()),
+            "heating_planned": bool((plan or {}).get("should_heat")),
             "decision_required": bool((plan or {}).get("decision_required")),
             "decision_choice": (plan or {}).get("decision_choice"),
             "missed_swim_dates": [self._iso_date(d) for d in (plan or {}).get("missed_swim_dates", [])],
@@ -2512,6 +2514,19 @@ class PredictiveHeatingSupport(DecisionSupport):
                 plan = dict(plan, action="WAIT", should_heat=False,
                             heat_target_c=None, night_heating=False,
                             reason="fermeture saisonnière définitive")
+        pool_allowed = getattr(self, "_chauffage_pool_mode_autorise", None)
+        calendar_blocked = getattr(self, "_seasonal_heating_blocked", None)
+        blocked = (
+            self.arret_force_actif()
+            or kind in {"disabled", "unknown"}
+            or (callable(pool_allowed) and not pool_allowed())
+            or (callable(calendar_blocked) and calendar_blocked())
+            or (kind == "auto" and not getattr(self, "gestion_pac_auto", True))
+        )
+        if blocked:
+            plan = dict(plan, action="WAIT", should_heat=False,
+                        heat_target_c=None, night_heating=False, decision_required=False,
+                        reason="chauffage non autorisé par la politique actuelle")
         self._publish_predictive_status(
             plan=plan,
             forecast=forecast,

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.19 - Safety-loop isolation and code hygiene (unreleased, depends on 0.10.18)
+
+- Isolate the safety loop stages (PAC flow protection, PAC auto policy, filtration loop). Each stage has its own fault key, logs a full traceback on its first failure and is recovered on success. A PAC-side error can no longer skip pump control (flow, quota, freeze protection), and a recurring failure is no longer silenced after the first one.
+- Split the 1000-line `_traitement_filtration` into one method per mode, with no intended behavior change; the daytime catch-up rule of 0.10.18 is carried over to the running-pump deficit path.
+- Replace wildcard imports with explicit ones, remove two unused computations, add a `ruff` gate (E9/F/B) to the validate and release workflows and pin `hacs/action` to a reviewed commit.
+- Preserve all entity IDs and the six YAML examples. Validation and limitations: docs/v0.10.19-RELEASE.md.
+
 ## 0.10.18 - Thermal stability and October 10 seasonal cutoff
 
 - Integrate the published v0.10.17 hybrid policy without duplicating its persistent closure gate. Change the default cutoff to October 10; explicit installation dates remain authoritative.

@@ -6,6 +6,7 @@ MODULE_DIR = Path(__file__).parents[1] / "apps" / "pool_manager"
 sys.path.insert(0, str(MODULE_DIR))
 
 from pool_common import TAB_MODE
+from pool_control import ControlMixin
 from pool_devices import DevicesMixin
 
 
@@ -101,11 +102,82 @@ def test_intelligent_and_safety_modes_disable_local_assist():
         ]
 
 
+class FakeTemperatureControl(ControlMixin):
+    """Pump already running inside the Temperature-mode filtration window."""
+
+    def __init__(self):
+        self.args = {
+            "mode_de_fonctionnement": "input_select.mode",
+            "temperature_eau": "sensor.water",
+            "mem_temp": "input_number.mem",
+            "coef": "input_number.coef",
+            "h_pivot": "input_datetime.pivot",
+            "mode_calcul": "input_boolean.abaque",
+            "duree_filtration_ete": "input_number.duree",
+            "tempo_eau": "input_number.tempo",
+        }
+        self.fin_tempo = 1
+        self.lock_text = False
+        self.temps_filtration_equivalent_jour = 2.0
+        self.stabilisation_active = False
+        self.brassage_en_cours = False
+        self.mode_speed_initialized = False
+        self.vitesse_mode_temperature = 70
+        self.derniere_vitesse_commande = None
+        self.chauffage_predictif_measurement_active = False
+        self.chauffage_predictif_last_plan = None
+        self.chauffage_predictif_last_plan_at = None
+        self.speed_commands = []
+
+    def __getattr__(self, name):
+        if name.startswith("__"):
+            raise AttributeError(name)
+        return lambda *args, **kwargs: None
+
+    def get_state(self, entity, **kwargs):
+        return {"input_select.mode": TAB_MODE[0], "input_datetime.pivot": "13:00:00"}.get(entity, "off")
+
+    def get_float_state(self, entity, default=0.0):
+        return {"input_number.coef": 100.0}.get(entity, 26.0)
+
+    def td_now(self):
+        return datetime.timedelta(hours=13)
+
+    def arret_force_actif(self):
+        return False
+
+    def start_sequence_is_running(self):
+        return False
+
+    def stop_sequence_is_running(self):
+        return False
+
+    def est_nuit(self, now):
+        return False
+
+    def pompe_est_on(self):
+        return True
+
+    def get_fan_percentage(self):
+        return 55
+
+    def set_pump_percentage(self, value, force=False):
+        self.speed_commands.append((value, force))
+        return value
+
+    def debit_pompe(self, value):
+        return 10.0
+
+
 def test_temperature_path_only_forces_initial_speed_once():
-    source = (MODULE_DIR / "pool_control.py").read_text(encoding="utf-8")
-    assert "if not self.mode_speed_initialized:" in source
-    assert "self.mode_speed_initialized = True" in source
-    assert "else:\n                    vitesse_appliquee = self.get_fan_percentage()" in source
+    app = FakeTemperatureControl()
+
+    app._traitement_filtration({})
+    app._traitement_filtration({})
+
+    assert app.mode_speed_initialized is True
+    # The reference speed is forced once; later loops keep the live speed.
+    assert app.speed_commands == [(70, True)]
 
 
 def test_predictive_measurement_preserves_speed_above_reference():

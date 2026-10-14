@@ -2,6 +2,7 @@
 # Copyright (C) 2026 jptstar
 
 import datetime
+from types import SimpleNamespace
 
 from pool_common import (
     TAB_MODE,
@@ -83,6 +84,19 @@ class ControlMixin:
 
         texte_plage = f"{str(h_debut).zfill(8)[:5]}-{str(h_pivot).zfill(8)[:5]}-{str(h_fin).zfill(8)[:5]}"
 
+        ctx = SimpleNamespace(
+            mode=mode,
+            now_dt=now_dt,
+            heure_actuelle=heure_actuelle,
+            nuit=nuit,
+            h_maintenant=h_maintenant,
+            h_debut=h_debut,
+            h_fin=h_fin,
+            texte_plage=texte_plage,
+            filtre_temps_eq=filtre_temps_eq,
+            objectif_temps_eq=objectif_temps_eq,
+        )
+
         # A certified pool-temperature measurement is a short protected cycle.
         # Once started, normal surplus / grid-import / quota optimization must
         # not throw away the hydraulic stabilization already achieved. Safety,
@@ -92,270 +106,278 @@ class ControlMixin:
             bool(getattr(self, "chauffage_predictif_measurement_active", False))
             and mode in [TAB_MODE[0], TAB_MODE[1], TAB_MODE[3]]
         ):
-            minimum = int(
-                getattr(self, "chauffage_predictif_mesure_vitesse_pct", 70)
-            )
-            if not self.pompe_est_on():
-                self.start_pump_with_delayed_speed(
-                    minimum,
-                    delay_s=2,
-                    context="mesure_temperature",
-                )
-                vitesse_appliquee = minimum
-            else:
-                vitesse_appliquee = self.get_fan_percentage()
-                if vitesse_appliquee is None:
-                    vitesse_appliquee = minimum
-                elif vitesse_appliquee < minimum:
-                    vitesse_appliquee = self.set_pump_percentage(
-                        minimum,
-                        force=True,
-                    )
-
-            _, restant_mesure, phase_mesure = self._measurement_progress()
-            if restant_mesure is None:
-                restant_txt = ""
-            else:
-                restant_mesure = max(0, int(restant_mesure))
-                mm = restant_mesure // 60
-                ss = restant_mesure % 60
-                restant_txt = f" • reste {mm:02d}:{ss:02d}"
-
-            phase_txt = {
-                "waiting_pac_stop": "attente arrêt PAC",
-                "raising_flow": "mise en circulation",
-                "circulating": "brassage",
-                "stability": "stabilité sonde",
-            }.get(phase_mesure, "mesure")
-
-            self.set_messages(
-                f"Mesure température | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
-                f"{vitesse_appliquee}% • {phase_txt}{restant_txt} • "
-                f"circulation protégée • {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
-            )
-            self.format_texte_solaire_debug(vitesse_appliquee)
-            return
+            return self._filtration_mesure_temperature(ctx)
 
         if self.stabilisation_active or self.brassage_en_cours:
-            self.maj_electrolyseur()
-            if not self.lock_text:
-                self.set_messages(
-                    f"En cours | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
-                    f"{texte_plage} | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
-                )
-                self.set_debug_w("")
-            return
+            return self._filtration_en_cours(ctx)
 
-        if mode == TAB_MODE[2]:
-            self.reset_stabilite_surplus()
-            self.reset_pid()
-            self.maj_electrolyseur()
-            if self.handle_bras is None:
-                self.planifier_bras(0)
-            self.afficher_prochain_bras()
-            return
+        handler = {
+            TAB_MODE[0]: self._filtration_mode_temperature,
+            TAB_MODE[1]: self._filtration_mode_intelligent,
+            TAB_MODE[2]: self._filtration_mode_hors_gel,
+            TAB_MODE[3]: self._filtration_mode_marche_forcee,
+        }.get(mode, self._filtration_mode_inconnu)
+        return handler(ctx)
 
-        if mode == TAB_MODE[3]:
-            self.reset_stabilite_surplus()
-            self.reset_pid()
+    def _filtration_mesure_temperature(self, ctx):
+        """Protected circulation while a certified water sample is taken."""
+        filtre_temps_eq, objectif_temps_eq = (ctx.filtre_temps_eq, ctx.objectif_temps_eq)
 
-            if not self.pompe_est_on():
-                self.start_pump_with_delayed_speed(self.vitesse_min_filtration_utile, delay_s=2, context="marche_forcee")
-                self.set_messages(
-                    f"Marche forcée | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
-                    f"démarrage | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
-                )
-                self.set_debug_w("")
-                return
-
+        minimum = int(
+            getattr(self, "chauffage_predictif_mesure_vitesse_pct", 70)
+        )
+        if not self.pompe_est_on():
+            self.start_pump_with_delayed_speed(
+                minimum,
+                delay_s=2,
+                context="mesure_temperature",
+            )
+            vitesse_appliquee = minimum
+        else:
             vitesse_appliquee = self.get_fan_percentage()
             if vitesse_appliquee is None:
-                vitesse_appliquee = self.derniere_vitesse_commande if self.derniere_vitesse_commande is not None else self.vitesse_min_filtration_utile
+                vitesse_appliquee = minimum
+            elif vitesse_appliquee < minimum:
+                vitesse_appliquee = self.set_pump_percentage(
+                    minimum,
+                    force=True,
+                )
 
-            debit = self.debit_pompe(vitesse_appliquee)
+        _, restant_mesure, phase_mesure = self._measurement_progress()
+        if restant_mesure is None:
+            restant_txt = ""
+        else:
+            restant_mesure = max(0, int(restant_mesure))
+            mm = restant_mesure // 60
+            ss = restant_mesure % 60
+            restant_txt = f" • reste {mm:02d}:{ss:02d}"
+
+        phase_txt = {
+            "waiting_pac_stop": "attente arrêt PAC",
+            "raising_flow": "mise en circulation",
+            "circulating": "brassage",
+            "stability": "stabilité sonde",
+        }.get(phase_mesure, "mesure")
+
+        self.set_messages(
+            f"Mesure température | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
+            f"{vitesse_appliquee}% • {phase_txt}{restant_txt} • "
+            f"circulation protégée • {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
+        )
+        self.format_texte_solaire_debug(vitesse_appliquee)
+        return
+
+    def _filtration_en_cours(self, ctx):
+        """Hydraulic stabilization or Hors Gel mixing already running."""
+        (
+            texte_plage,
+            filtre_temps_eq,
+            objectif_temps_eq,
+        ) = (
+            ctx.texte_plage,
+            ctx.filtre_temps_eq,
+            ctx.objectif_temps_eq,
+        )
+
+        self.maj_electrolyseur()
+        if not self.lock_text:
+            self.set_messages(
+                f"En cours | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
+                f"{texte_plage} | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
+            )
+            self.set_debug_w("")
+        return
+
+    def _filtration_mode_hors_gel(self, ctx):
+        """Hors Gel: periodic mixing schedule only."""
+        self.reset_stabilite_surplus()
+        self.reset_pid()
+        self.maj_electrolyseur()
+        if self.handle_bras is None:
+            self.planifier_bras(0)
+        self.afficher_prochain_bras()
+        return
+
+    def _filtration_mode_marche_forcee(self, ctx):
+        """Marche forcée: keep the pump on at its current speed."""
+        filtre_temps_eq, objectif_temps_eq = (ctx.filtre_temps_eq, ctx.objectif_temps_eq)
+
+        self.reset_stabilite_surplus()
+        self.reset_pid()
+
+        if not self.pompe_est_on():
+            self.start_pump_with_delayed_speed(self.vitesse_min_filtration_utile, delay_s=2, context="marche_forcee")
             self.set_messages(
                 f"Marche forcée | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
-                f"{vitesse_appliquee}% | {debit:.1f}m3/h | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
-            )
-
-            puissance, reelle = self.puissance_pompe_affichee(vitesse_appliquee)
-            if puissance is None:
-                self.set_debug_w("")
-            else:
-                suffixe = "réel" if reelle else "estimé"
-                self.set_debug_w(f"Pompe {int(round(puissance))}W {suffixe}")
-            return
-
-        if mode == TAB_MODE[0]:
-            self.reset_stabilite_surplus()
-            self.reset_pid()
-
-            if not (h_debut <= h_maintenant <= h_fin) and self.pac_besoin_chauffe():
-                # Night heating outranks the 35% periodic mixing program even
-                # in Temperature mode; never lower flow under an active PAC.
-                self._ensure_pac_flow()
-                self.set_messages('PAC prioritaire hors plage température',
-                                  'circulation minimale PAC maintenue')
-                self.format_texte_solaire_debug(self.get_fan_percentage())
-                return
-
-            if nuit and not (h_debut <= h_maintenant <= h_fin):
-                if self.is_night_brassage_slot(heure_actuelle):
-                    self.start_night_brassage(now_dt, filtre_temps_eq, objectif_temps_eq)
-                    return
-
-            if h_debut <= h_maintenant <= h_fin:
-                if not self.pompe_est_on():
-                    self.start_pump_with_delayed_speed(self.vitesse_mode_temperature, delay_s=2, context="temperature")
-                    self.set_messages(
-                        f"Température | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
-                        f"démarrage | {texte_plage} | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
-                    )
-                    self.set_debug_w("")
-                    return
-
-                if not self.mode_speed_initialized:
-                    vitesse_appliquee = self.set_pump_percentage(self.vitesse_mode_temperature, force=True)
-                    self.mode_speed_initialized = True
-                else:
-                    vitesse_appliquee = self.get_fan_percentage()
-                    if vitesse_appliquee is None:
-                        vitesse_appliquee = self.derniere_vitesse_commande if self.derniere_vitesse_commande is not None else self.vitesse_mode_temperature
-
-                debit = self.debit_pompe(vitesse_appliquee)
-
-                # La seule stabilisation utile est le délai hydraulique normal
-                # après un vrai redémarrage de pompe. Elle ne prolonge jamais
-                # artificiellement la filtration et ne modifie pas la vitesse.
-                if not self.fin_tempo:
-                    try:
-                        tempo_eau = max(0, int(float(self.get_state(self.args["tempo_eau"]))))
-                    except Exception:
-                        tempo_eau = 0
-                    restant = max(0, int(tempo_eau - self.temps_depuis_on()))
-                    self.set_messages(
-                        f"Stabilisation température | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
-                        f"{vitesse_appliquee}% | encore {restant}s | {texte_plage} | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
-                    )
-                    self.format_texte_solaire_debug(vitesse_appliquee)
-                    return
-
-                self.set_messages(
-                    f"Température | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
-                    f"{vitesse_appliquee}% | {debit:.1f}m3/h | {texte_plage} | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
-                )
-                self.format_texte_solaire_debug(vitesse_appliquee)
-                return
-
-            self.turn_off_pompe_mem(reason="hors plage de filtration température")
-            self.set_messages(
-                f"Température | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
-                f"{texte_plage} | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
+                f"démarrage | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
             )
             self.set_debug_w("")
             return
 
-        if mode == TAB_MODE[1]:
-            reseau_net = self.get_reseau_net_w()
-            if reseau_net is None:
-                self.debut_manque_soleil = None
-                self.reset_stabilite_surplus()
-                self.reset_pid()
+        vitesse_appliquee = self.get_fan_percentage()
+        if vitesse_appliquee is None:
+            vitesse_appliquee = self.derniere_vitesse_commande if self.derniere_vitesse_commande is not None else self.vitesse_min_filtration_utile
+
+        debit = self.debit_pompe(vitesse_appliquee)
+        self.set_messages(
+            f"Marche forcée | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
+            f"{vitesse_appliquee}% | {debit:.1f}m3/h | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
+        )
+
+        puissance, reelle = self.puissance_pompe_affichee(vitesse_appliquee)
+        if puissance is None:
+            self.set_debug_w("")
+        else:
+            suffixe = "réel" if reelle else "estimé"
+            self.set_debug_w(f"Pompe {int(round(puissance))}W {suffixe}")
+        return
+
+    def _filtration_mode_temperature(self, ctx):
+        """Température: fixed window around the pivot hour."""
+        (
+            now_dt,
+            heure_actuelle,
+            nuit,
+            h_maintenant,
+            h_debut,
+            h_fin,
+            texte_plage,
+            filtre_temps_eq,
+            objectif_temps_eq,
+        ) = (
+            ctx.now_dt,
+            ctx.heure_actuelle,
+            ctx.nuit,
+            ctx.h_maintenant,
+            ctx.h_debut,
+            ctx.h_fin,
+            ctx.texte_plage,
+            ctx.filtre_temps_eq,
+            ctx.objectif_temps_eq,
+        )
+
+        self.reset_stabilite_surplus()
+        self.reset_pid()
+
+        if not (h_debut <= h_maintenant <= h_fin) and self.pac_besoin_chauffe():
+            # Night heating outranks the 35% periodic mixing program even
+            # in Temperature mode; never lower flow under an active PAC.
+            self._ensure_pac_flow()
+            self.set_messages('PAC prioritaire hors plage température',
+                              'circulation minimale PAC maintenue')
+            self.format_texte_solaire_debug(self.get_fan_percentage())
+            return
+
+        if nuit and not (h_debut <= h_maintenant <= h_fin):
+            if self.is_night_brassage_slot(heure_actuelle):
+                self.start_night_brassage(now_dt, filtre_temps_eq, objectif_temps_eq)
+                return
+
+        if h_debut <= h_maintenant <= h_fin:
+            if not self.pompe_est_on():
+                self.start_pump_with_delayed_speed(self.vitesse_mode_temperature, delay_s=2, context="temperature")
                 self.set_messages(
-                    f"Mesure réseau indisponible | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
-                    "arbitrage solaire suspendu; vérifier restitution_inst",
+                    f"Température | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
+                    f"démarrage | {texte_plage} | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
                 )
-                self.set_debug_w("Réseau indisponible")
+                self.set_debug_w("")
                 return
 
-            surplus_brut = self.get_surplus_depuis_reseau_net(reseau_net)
-            surplus_net, etat_pac, _ = self.calcule_surplus_net_avec_pac(surplus_brut)
-            pv_power = self.get_pv_power()
+            if not self.mode_speed_initialized:
+                vitesse_appliquee = self.set_pump_percentage(self.vitesse_mode_temperature, force=True)
+                self.mode_speed_initialized = True
+            else:
+                vitesse_appliquee = self.get_fan_percentage()
+                if vitesse_appliquee is None:
+                    vitesse_appliquee = self.derniere_vitesse_commande if self.derniere_vitesse_commande is not None else self.vitesse_mode_temperature
 
-            pac_prioritaire_jour = self.pac_mode_prioritaire_soleil()
-            surplus_pilote = self.surplus_equivalent_pac_jour(surplus_net)
-            tempo_anti_coupure_active = self.tempo_anti_coupure_active()
+            debit = self.debit_pompe(vitesse_appliquee)
 
-            reste_temps_eq = max(0.0, objectif_temps_eq - filtre_temps_eq)
-            attendu = self.progression_attendue(objectif_temps_eq)
-            retard = max(0.0, attendu - filtre_temps_eq)
-
-            en_plage_solaire = self.est_dans_plage(self.heure_debut_solaire, self.heure_fin_solaire)
-            en_plage_rattrapage_soir = self.est_dans_plage(self.heure_fin_solaire, self.heure_fin_rattrapage)
-
-            pompe_on = self.pompe_est_on()
-            pac_ok = self.pac_autorisee() is True
-            pac_chauffe = pac_ok and etat_pac in ["silent", "smart", "turbo"]
-            pac_besoin = self.pac_besoin_chauffe()
-
-            # PRIORITÉ ABSOLUE : PAC ou quota journalier, même la nuit.
-            if nuit:
-                self.reset_stabilite_surplus()
-                self.reset_pid()
-                self.debut_manque_soleil = None
-
-                if self.appliquer_priorite_pac_ou_quota(
-                    filtre_temps_eq,
-                    objectif_temps_eq,
-                    pompe_on,
-                    pac_besoin,
-                    pac_chauffe,
-                    etat_pac,
-                    surplus_net,
-                    reseau_net,
-                    pv_power,
-                    extra="nuit"
-                ):
-                    return
-
-                if self.is_night_brassage_slot(heure_actuelle):
-                    self.start_night_brassage(now_dt, filtre_temps_eq, objectif_temps_eq)
-                    return
-
-                self.turn_off_pompe_mem(reason="attente nocturne")
+            # La seule stabilisation utile est le délai hydraulique normal
+            # après un vrai redémarrage de pompe. Elle ne prolonge jamais
+            # artificiellement la filtration et ne modifie pas la vitesse.
+            if not self.fin_tempo:
+                try:
+                    tempo_eau = max(0, int(float(self.get_state(self.args["tempo_eau"]))))
+                except Exception:
+                    tempo_eau = 0
+                restant = max(0, int(tempo_eau - self.temps_depuis_on()))
                 self.set_messages(
-                    f"Nuit attente | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
-                    f"{filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
+                    f"Stabilisation température | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
+                    f"{vitesse_appliquee}% | encore {restant}s | {texte_plage} | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
                 )
-                self.set_debug_w("")
+                self.format_texte_solaire_debug(vitesse_appliquee)
                 return
 
-            if objectif_temps_eq <= 0:
-                self.turn_off_pompe_mem(reason="aucune filtration nécessaire")
-                self.debut_manque_soleil = None
-                self.reset_stabilite_surplus()
-                self.reset_pid()
-                short_msg, detail_msg = self.split_message_simple("Aucune filtration", filtre_temps_eq, objectif_temps_eq)
-                self.set_messages(short_msg, detail_msg)
-                self.set_debug_w("")
-                return
+            self.set_messages(
+                f"Température | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
+                f"{vitesse_appliquee}% | {debit:.1f}m3/h | {texte_plage} | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
+            )
+            self.format_texte_solaire_debug(vitesse_appliquee)
+            return
 
-            if reste_temps_eq <= 0:
-                # Si le quota est atteint mais que la PAC a encore besoin de chauffer, elle garde la priorité.
-                if self.pac_prioritaire_absolue and (pac_besoin or pac_chauffe):
-                    if self.appliquer_priorite_pac_ou_quota(
-                        filtre_temps_eq,
-                        objectif_temps_eq,
-                        pompe_on,
-                        pac_besoin,
-                        pac_chauffe,
-                        etat_pac,
-                        surplus_net,
-                        reseau_net,
-                        pv_power
-                    ):
-                        return
+        self.turn_off_pompe_mem(reason="hors plage de filtration température")
+        self.set_messages(
+            f"Température | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
+            f"{texte_plage} | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
+        )
+        self.set_debug_w("")
+        return
 
-                self.turn_off_pompe_mem(reason="objectif filtration atteint")
-                self.debut_manque_soleil = None
-                self.reset_stabilite_surplus()
-                self.reset_pid()
-                short_msg, detail_msg = self.split_message_simple("Objectif atteint", filtre_temps_eq, objectif_temps_eq)
-                self.set_messages(short_msg, detail_msg)
-                self.set_debug_w("")
-                return
+    def _filtration_mode_intelligent(self, ctx):
+        """Intelligent: PAC/quota priority, then solar optimization."""
+        (
+            now_dt,
+            heure_actuelle,
+            nuit,
+            filtre_temps_eq,
+            objectif_temps_eq,
+        ) = (
+            ctx.now_dt,
+            ctx.heure_actuelle,
+            ctx.nuit,
+            ctx.filtre_temps_eq,
+            ctx.objectif_temps_eq,
+        )
 
-            # Priorité PAC puis garantie quota avant l'optimisation solaire.
+        reseau_net = self.get_reseau_net_w()
+        if reseau_net is None:
+            self.debut_manque_soleil = None
+            self.reset_stabilite_surplus()
+            self.reset_pid()
+            self.set_messages(
+                f"Mesure réseau indisponible | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
+                "arbitrage solaire suspendu; vérifier restitution_inst",
+            )
+            self.set_debug_w("Réseau indisponible")
+            return
+
+        surplus_brut = self.get_surplus_depuis_reseau_net(reseau_net)
+        surplus_net, etat_pac, _ = self.calcule_surplus_net_avec_pac(surplus_brut)
+        pv_power = self.get_pv_power()
+
+        pac_prioritaire_jour = self.pac_mode_prioritaire_soleil()
+        surplus_pilote = self.surplus_equivalent_pac_jour(surplus_net)
+        tempo_anti_coupure_active = self.tempo_anti_coupure_active()
+
+        reste_temps_eq = max(0.0, objectif_temps_eq - filtre_temps_eq)
+        attendu = self.progression_attendue(objectif_temps_eq)
+        retard = max(0.0, attendu - filtre_temps_eq)
+
+        en_plage_solaire = self.est_dans_plage(self.heure_debut_solaire, self.heure_fin_solaire)
+        en_plage_rattrapage_soir = self.est_dans_plage(self.heure_fin_solaire, self.heure_fin_rattrapage)
+
+        pompe_on = self.pompe_est_on()
+        pac_ok = self.pac_autorisee() is True
+        pac_chauffe = pac_ok and etat_pac in ["silent", "smart", "turbo"]
+        pac_besoin = self.pac_besoin_chauffe()
+
+        # PRIORITÉ ABSOLUE : PAC ou quota journalier, même la nuit.
+        if nuit:
+            self.reset_stabilite_surplus()
+            self.reset_pid()
+            self.debut_manque_soleil = None
+
             if self.appliquer_priorite_pac_ou_quota(
                 filtre_temps_eq,
                 objectif_temps_eq,
@@ -365,263 +387,446 @@ class ControlMixin:
                 etat_pac,
                 surplus_net,
                 reseau_net,
-                pv_power
+                pv_power,
+                extra="nuit"
             ):
                 return
 
-            soleil_suffisant_pour_demarrer = surplus_pilote >= self.seuil_surplus_demarrage_w
-            soleil_trop_faible_pour_rester = surplus_pilote < self.seuil_surplus_arret_w
-            surplus_fragile = surplus_pilote < self.seuil_surplus_demarrage_w
-
-            vitesse_rattrapage_dyn = self.calcule_vitesse_rattrapage(retard, objectif_temps_eq)
-            vitesse_rattrapage_dyn = self.ajuste_vitesse_rattrapage_selon_fin_plage(vitesse_rattrapage_dyn, retard, objectif_temps_eq)
-
-            if surplus_fragile and vitesse_rattrapage_dyn is not None:
-                vitesse_rattrapage_dyn = self.limite_vitesse_surplus_fragile(
-                    vitesse_rattrapage_dyn,
-                    pac_chauffe=pac_chauffe,
-                    pac_prioritaire=pac_prioritaire_jour,
-                    rattrapage=True
-                )
-
-            complement_soir_autorise = self.autoriser_complement_soir(filtre_temps_eq, objectif_temps_eq, reste_temps_eq)
-
-            if not pompe_on:
-                self.debut_manque_soleil = None
-                self.reset_pid()
-
-                stable_surplus_ok, restant_stabilite = self.stabilite_surplus_ok(surplus_pilote)
-
-                if soleil_suffisant_pour_demarrer and stable_surplus_ok and self.temps_depuis_off() >= self.tempo_min_off_solaire:
-                    vitesse = max(self.calcule_vitesse_solaire(surplus_pilote), self.vitesse_min_filtration_utile)
-                    if pac_chauffe or pac_prioritaire_jour:
-                        vitesse = max(vitesse, self.vitesse_min_pac_active)
-
-                    self.start_pump_with_delayed_speed(vitesse, delay_s=2, context="surplus_solaire")
-                    short_msg, detail_msg = self.split_message_solaire(
-                        "PAC + soleil" if pac_prioritaire_jour else "Surplus solaire",
-                        vitesse,
-                        filtre_temps_eq,
-                        objectif_temps_eq
-                    )
-                    self.set_messages(short_msg, detail_msg)
-                    self.format_texte_solaire_debug(vitesse, surplus_net, reseau_net, pv_power)
-                    return
-
-                if en_plage_solaire and vitesse_rattrapage_dyn is not None and stable_surplus_ok and self.temps_depuis_off() >= self.tempo_min_off_solaire:
-                    vitesse = max(vitesse_rattrapage_dyn, self.vitesse_min_filtration_utile)
-                    if surplus_net > 0:
-                        vitesse = max(vitesse, self.vitesse_solaire_maintien(surplus_net))
-                    if pac_chauffe or pac_prioritaire_jour:
-                        vitesse = max(vitesse, self.vitesse_min_pac_active)
-                    if surplus_fragile:
-                        vitesse = self.limite_vitesse_surplus_fragile(vitesse, pac_chauffe=pac_chauffe, pac_prioritaire=pac_prioritaire_jour, rattrapage=True)
-
-                    self.start_pump_with_delayed_speed(vitesse, delay_s=2, context="rattrapage")
-                    libelle = "PAC + rattrapage" if pac_prioritaire_jour else ("Surplus + rattrapage" if surplus_net > 0 else "Rattrapage retard")
-                    short_msg, detail_msg = self.split_message_solaire(libelle, vitesse, filtre_temps_eq, objectif_temps_eq)
-                    self.set_messages(short_msg, detail_msg)
-                    self.format_texte_solaire_debug(vitesse, surplus_net, reseau_net, pv_power)
-                    return
-
-                if en_plage_rattrapage_soir and complement_soir_autorise and self.temps_depuis_off() >= self.tempo_min_off_solaire:
-                    self.reset_stabilite_surplus()
-                    vitesse = min(self.vitesse_rattrapage, self.vitesse_max_complement_soir)
-                    vitesse = max(vitesse, self.vitesse_min_filtration_utile)
-                    if pac_chauffe:
-                        vitesse = max(vitesse, self.vitesse_min_pac_active)
-
-                    self.start_pump_with_delayed_speed(vitesse, delay_s=2, context="complement_soir")
-                    short_msg, detail_msg = self.split_message_solaire("Complément soir", vitesse, filtre_temps_eq, objectif_temps_eq)
-                    self.set_messages(short_msg, detail_msg)
-                    self.format_texte_solaire_debug(vitesse, surplus_net, reseau_net, pv_power)
-                    return
-
-                if soleil_suffisant_pour_demarrer and not stable_surplus_ok:
-                    self.set_messages(
-                        f"Surplus faible | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
-                        f"attente on {max(0, int(self.tempo_min_off_solaire - self.temps_depuis_off()))}s | stabilité {restant_stabilite}s | surplus {int(round(max(0.0, surplus_pilote)))}W | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
-                    )
-                elif surplus_brut <= 0:
-                    self.reset_stabilite_surplus()
-                    self.set_messages(
-                        f"Conso maison forte | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
-                        f"{filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
-                    )
-                elif surplus_pilote < self.seuil_surplus_demarrage_w:
-                    self.reset_stabilite_surplus()
-                    self.set_messages(
-                        f"{'PAC consomme surplus' if pac_chauffe else 'Surplus insuffisant'} | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
-                        f"{filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
-                    )
-                else:
-                    self.set_messages(
-                        f"Surplus OK | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
-                        f"redémarrage dans {max(0, int(self.tempo_min_off_solaire - self.temps_depuis_off()))}s | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
-                    )
-
-                self.set_debug_solaire_off(surplus_net, reseau_net, pv_power)
+            if self.is_night_brassage_slot(heure_actuelle):
+                self.start_night_brassage(now_dt, filtre_temps_eq, objectif_temps_eq)
                 return
 
-            if en_plage_rattrapage_soir and complement_soir_autorise and not en_plage_solaire:
-                self.debut_manque_soleil = None
-                self.reset_stabilite_surplus()
-                self.reset_pid()
+            self.turn_off_pompe_mem(reason="attente nocturne")
+            self.set_messages(
+                f"Nuit attente | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
+                f"{filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
+            )
+            self.set_debug_w("")
+            return
 
-                vitesse = min(self.vitesse_rattrapage, self.vitesse_max_complement_soir)
-                vitesse = max(vitesse, self.vitesse_min_filtration_utile)
-                if pac_chauffe:
-                    vitesse = max(vitesse, self.vitesse_min_pac_active)
+        if objectif_temps_eq <= 0:
+            self.turn_off_pompe_mem(reason="aucune filtration nécessaire")
+            self.debut_manque_soleil = None
+            self.reset_stabilite_surplus()
+            self.reset_pid()
+            short_msg, detail_msg = self.split_message_simple("Aucune filtration", filtre_temps_eq, objectif_temps_eq)
+            self.set_messages(short_msg, detail_msg)
+            self.set_debug_w("")
+            return
 
-                vitesse_appliquee = self.set_pump_percentage(vitesse)
-                short_msg, detail_msg = self.split_message_solaire("Complément soir", vitesse_appliquee, filtre_temps_eq, objectif_temps_eq)
-                self.set_messages(short_msg, detail_msg)
-                self.format_texte_solaire_debug(vitesse_appliquee, surplus_net, reseau_net, pv_power)
-                return
-
-            if en_plage_solaire:
-                self.reset_stabilite_surplus()
-                vitesse_actuelle = self.get_fan_percentage()
-                if vitesse_actuelle is None:
-                    vitesse_actuelle = self.derniere_vitesse_commande if self.derniere_vitesse_commande is not None else self.vitesse_min_filtration_utile
-
-                if soleil_trop_faible_pour_rester and self.temps_depuis_on() < self.tempo_min_on_solaire:
-                    self.debut_manque_soleil = None
-                    self.reset_pid()
-
-                    vitesse = self.get_fan_percentage()
-                    if vitesse is None:
-                        vitesse = self.derniere_vitesse_commande if self.derniere_vitesse_commande is not None else self.vitesse_min_filtration_utile
-
-                    self.set_messages(
-                        f"Surplus faible | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
-                        f"arrêt dans {max(0, int(self.tempo_min_on_solaire - self.temps_depuis_on()))}s | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
-                    )
-                    self.format_texte_solaire_debug(vitesse, surplus_net, reseau_net, pv_power)
+        if reste_temps_eq <= 0:
+            # Si le quota est atteint mais que la PAC a encore besoin de chauffer, elle garde la priorité.
+            if self.pac_prioritaire_absolue and (pac_besoin or pac_chauffe):
+                if self.appliquer_priorite_pac_ou_quota(
+                    filtre_temps_eq,
+                    objectif_temps_eq,
+                    pompe_on,
+                    pac_besoin,
+                    pac_chauffe,
+                    etat_pac,
+                    surplus_net,
+                    reseau_net,
+                    pv_power
+                ):
                     return
 
-                if soleil_trop_faible_pour_rester and self.temps_depuis_on() >= self.tempo_min_on_solaire:
-                    if self.debut_manque_soleil is None:
-                        self.debut_manque_soleil = datetime.datetime.now()
+            self.turn_off_pompe_mem(reason="objectif filtration atteint")
+            self.debut_manque_soleil = None
+            self.reset_stabilite_surplus()
+            self.reset_pid()
+            short_msg, detail_msg = self.split_message_simple("Objectif atteint", filtre_temps_eq, objectif_temps_eq)
+            self.set_messages(short_msg, detail_msg)
+            self.set_debug_w("")
+            return
 
-                    duree_manque = (datetime.datetime.now() - self.debut_manque_soleil).total_seconds()
+        # Priorité PAC puis garantie quota avant l'optimisation solaire.
+        if self.appliquer_priorite_pac_ou_quota(
+            filtre_temps_eq,
+            objectif_temps_eq,
+            pompe_on,
+            pac_besoin,
+            pac_chauffe,
+            etat_pac,
+            surplus_net,
+            reseau_net,
+            pv_power
+        ):
+            return
 
-                    if pac_prioritaire_jour and self.pac_maintien_jour_force:
-                        self.reset_pid()
-                        vitesse = max(self.vitesse_min_filtration_utile, self.vitesse_min_pac_active)
-                        vitesse = self.limite_vitesse_surplus_fragile(vitesse, pac_chauffe=True, pac_prioritaire=True, rattrapage=False)
-                        vitesse_appliquee = self.set_pump_percentage(vitesse)
-                        short_msg, detail_msg = self.split_message_solaire("PAC prioritaire soleil", vitesse_appliquee, filtre_temps_eq, objectif_temps_eq, extra=f"maintien {int(duree_manque)}s")
-                        self.set_messages(short_msg, detail_msg)
-                        self.format_texte_solaire_debug(vitesse_appliquee, surplus_net, reseau_net, pv_power)
-                        return
+        soleil_suffisant_pour_demarrer = surplus_pilote >= self.seuil_surplus_demarrage_w
+        soleil_trop_faible_pour_rester = surplus_pilote < self.seuil_surplus_arret_w
+        surplus_fragile = surplus_pilote < self.seuil_surplus_demarrage_w
 
-                    if pac_chauffe:
-                        self.reset_pid()
-                        vitesse = max(self.vitesse_min_filtration_utile, self.vitesse_min_pac_active)
-                        vitesse = self.limite_vitesse_surplus_fragile(vitesse, pac_chauffe=True, pac_prioritaire=False, rattrapage=False)
-                        vitesse_appliquee = self.set_pump_percentage(vitesse)
-                        short_msg, detail_msg = self.split_message_solaire("Maintien pour PAC", vitesse_appliquee, filtre_temps_eq, objectif_temps_eq, extra=f"anti-coupure {int(duree_manque)}s")
-                        self.set_messages(short_msg, detail_msg)
-                        self.format_texte_solaire_debug(vitesse_appliquee, surplus_net, reseau_net, pv_power)
-                        return
+        vitesse_rattrapage_dyn = self.calcule_vitesse_rattrapage(retard, objectif_temps_eq)
+        vitesse_rattrapage_dyn = self.ajuste_vitesse_rattrapage_selon_fin_plage(vitesse_rattrapage_dyn, retard, objectif_temps_eq)
 
-                    if vitesse_rattrapage_dyn is not None:
-                        # The off->on branch already authorizes daytime
-                        # catch-up without surplus. Apply that SAME policy
-                        # while running, instead of stopping after calibration
-                        # and restarting ten minutes later (history-3).
-                        self.debut_manque_soleil = None
-                        self.reset_pid()
-                        vitesse = max(vitesse_rattrapage_dyn, self.vitesse_min_filtration_utile)
-                        vitesse = self.limite_vitesse_surplus_fragile(
-                            vitesse, pac_chauffe=False, pac_prioritaire=False, rattrapage=True,
-                        )
-                        vitesse_appliquee = self.set_pump_percentage(vitesse)
-                        short_msg, detail_msg = self.split_message_solaire(
-                            "Rattrapage de jour", vitesse_appliquee, filtre_temps_eq,
-                            objectif_temps_eq, extra="quota en retard; réseau autorisé",
-                        )
-                        self.set_messages(short_msg, detail_msg)
-                        self.format_texte_solaire_debug(vitesse_appliquee, surplus_net, reseau_net, pv_power)
-                        return
+        if surplus_fragile and vitesse_rattrapage_dyn is not None:
+            vitesse_rattrapage_dyn = self.limite_vitesse_surplus_fragile(
+                vitesse_rattrapage_dyn,
+                pac_chauffe=pac_chauffe,
+                pac_prioritaire=pac_prioritaire_jour,
+                rattrapage=True
+            )
 
-                    if duree_manque >= tempo_anti_coupure_active:
-                        self.turn_off_pompe_mem(
-                            reason=(
-                                "consommation maison trop élevée"
-                                if surplus_brut <= 0
-                                else "surplus solaire insuffisant"
-                            )
-                        )
-                        self.debut_manque_soleil = None
-                        self.reset_pid()
-                        self.set_messages(
-                            f"{'Conso maison forte' if surplus_brut <= 0 else 'Surplus insuffisant'} | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
-                            f"{filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
-                        )
-                        self.set_debug_solaire_off(surplus_net, reseau_net, pv_power)
-                        return
+        complement_soir_autorise = self.autoriser_complement_soir(filtre_temps_eq, objectif_temps_eq, reste_temps_eq)
 
-                    vitesse_pid, _, _ = self.calcule_vitesse_pid_hybride(reseau_net, vitesse_actuelle)
-                    if vitesse_rattrapage_dyn is not None and not surplus_fragile:
-                        vitesse_pid = max(vitesse_pid, vitesse_rattrapage_dyn)
+        s = SimpleNamespace(
+            reseau_net=reseau_net,
+            surplus_brut=surplus_brut,
+            surplus_net=surplus_net,
+            etat_pac=etat_pac,
+            pv_power=pv_power,
+            pac_prioritaire_jour=pac_prioritaire_jour,
+            surplus_pilote=surplus_pilote,
+            tempo_anti_coupure_active=tempo_anti_coupure_active,
+            reste_temps_eq=reste_temps_eq,
+            retard=retard,
+            en_plage_solaire=en_plage_solaire,
+            en_plage_rattrapage_soir=en_plage_rattrapage_soir,
+            pompe_on=pompe_on,
+            pac_chauffe=pac_chauffe,
+            soleil_suffisant_pour_demarrer=soleil_suffisant_pour_demarrer,
+            soleil_trop_faible_pour_rester=soleil_trop_faible_pour_rester,
+            surplus_fragile=surplus_fragile,
+            vitesse_rattrapage_dyn=vitesse_rattrapage_dyn,
+            complement_soir_autorise=complement_soir_autorise,
+        )
 
-                    vitesse_pid = self.limite_vitesse_surplus_fragile(vitesse_pid, pac_chauffe=False, pac_prioritaire=False, rattrapage=bool(vitesse_rattrapage_dyn is not None))
-                    vitesse_appliquee = self.set_pump_percentage(vitesse_pid)
-                    libelle = "Maintien + rattrapage" if vitesse_rattrapage_dyn is not None and not surplus_fragile else "Maintien surplus faible"
-                    short_msg, detail_msg = self.split_message_solaire(libelle, vitesse_appliquee, filtre_temps_eq, objectif_temps_eq, extra=f"anti-coupure {int(duree_manque)}s")
-                    self.set_messages(short_msg, detail_msg)
-                    self.format_texte_solaire_debug(vitesse_appliquee, surplus_net, reseau_net, pv_power)
-                    return
+        if not pompe_on:
+            return self._intelligent_pompe_arretee(ctx, s)
 
-                self.debut_manque_soleil = None
-                vitesse_pid, _, _ = self.calcule_vitesse_pid_hybride(reseau_net, vitesse_actuelle)
-
-                if vitesse_rattrapage_dyn is not None and not surplus_fragile:
-                    vitesse_pid = max(vitesse_pid, vitesse_rattrapage_dyn)
-                elif vitesse_rattrapage_dyn is not None and surplus_fragile:
-                    vitesse_pid = max(vitesse_pid, min(vitesse_rattrapage_dyn, self.vitesse_max_rattrapage_surplus_faible))
-
-                if pac_chauffe or pac_prioritaire_jour:
-                    vitesse_pid = max(vitesse_pid, self.vitesse_min_pac_active)
-
-                if surplus_fragile:
-                    vitesse_pid = self.limite_vitesse_surplus_fragile(vitesse_pid, pac_chauffe=pac_chauffe, pac_prioritaire=pac_prioritaire_jour, rattrapage=bool(vitesse_rattrapage_dyn is not None))
-                else:
-                    vitesse_pid = max(self.vitesse_min_filtration_utile, min(self.vitesse_max_solaire, vitesse_pid))
-
-                vitesse_appliquee = self.set_pump_percentage(vitesse_pid)
-
-                if vitesse_rattrapage_dyn is not None and pac_prioritaire_jour and not surplus_fragile:
-                    libelle = "PAC + rattrapage"
-                elif vitesse_rattrapage_dyn is not None and surplus_net > 0 and not surplus_fragile:
-                    libelle = "Surplus + rattrapage"
-                elif vitesse_rattrapage_dyn is not None and not surplus_fragile:
-                    libelle = "Rattrapage retard"
-                elif pac_prioritaire_jour:
-                    libelle = "PAC + soleil"
-                else:
-                    libelle = "Surplus solaire"
-
-                short_msg, detail_msg = self.split_message_solaire(libelle, vitesse_appliquee, filtre_temps_eq, objectif_temps_eq)
-                self.set_messages(short_msg, detail_msg)
-                self.format_texte_solaire_debug(vitesse_appliquee, surplus_net, reseau_net, pv_power)
-                return
-
+        if en_plage_rattrapage_soir and complement_soir_autorise and not en_plage_solaire:
             self.debut_manque_soleil = None
             self.reset_stabilite_surplus()
             self.reset_pid()
 
-            vitesse = self.vitesse_min_filtration_utile
+            vitesse = min(self.vitesse_rattrapage, self.vitesse_max_complement_soir)
+            vitesse = max(vitesse, self.vitesse_min_filtration_utile)
             if pac_chauffe:
                 vitesse = max(vitesse, self.vitesse_min_pac_active)
 
             vitesse_appliquee = self.set_pump_percentage(vitesse)
-            short_msg, detail_msg = self.split_message_solaire("Maintien vitesse mini", vitesse_appliquee, filtre_temps_eq, objectif_temps_eq)
+            short_msg, detail_msg = self.split_message_solaire("Complément soir", vitesse_appliquee, filtre_temps_eq, objectif_temps_eq)
             self.set_messages(short_msg, detail_msg)
             self.format_texte_solaire_debug(vitesse_appliquee, surplus_net, reseau_net, pv_power)
             return
+
+        if en_plage_solaire:
+            return self._intelligent_plage_solaire(ctx, s)
+
+        self.debut_manque_soleil = None
+        self.reset_stabilite_surplus()
+        self.reset_pid()
+
+        vitesse = self.vitesse_min_filtration_utile
+        if pac_chauffe:
+            vitesse = max(vitesse, self.vitesse_min_pac_active)
+
+        vitesse_appliquee = self.set_pump_percentage(vitesse)
+        short_msg, detail_msg = self.split_message_solaire("Maintien vitesse mini", vitesse_appliquee, filtre_temps_eq, objectif_temps_eq)
+        self.set_messages(short_msg, detail_msg)
+        self.format_texte_solaire_debug(vitesse_appliquee, surplus_net, reseau_net, pv_power)
+        return
+
+    def _intelligent_pompe_arretee(self, ctx, s):
+        """Intelligent, pump off: decide whether and why to start."""
+        filtre_temps_eq, objectif_temps_eq = (ctx.filtre_temps_eq, ctx.objectif_temps_eq)
+        (
+            reseau_net,
+            surplus_brut,
+            surplus_net,
+            pv_power,
+            pac_prioritaire_jour,
+            surplus_pilote,
+            en_plage_solaire,
+            en_plage_rattrapage_soir,
+            pac_chauffe,
+            soleil_suffisant_pour_demarrer,
+            surplus_fragile,
+            vitesse_rattrapage_dyn,
+            complement_soir_autorise,
+        ) = (
+            s.reseau_net,
+            s.surplus_brut,
+            s.surplus_net,
+            s.pv_power,
+            s.pac_prioritaire_jour,
+            s.surplus_pilote,
+            s.en_plage_solaire,
+            s.en_plage_rattrapage_soir,
+            s.pac_chauffe,
+            s.soleil_suffisant_pour_demarrer,
+            s.surplus_fragile,
+            s.vitesse_rattrapage_dyn,
+            s.complement_soir_autorise,
+        )
+
+        self.debut_manque_soleil = None
+        self.reset_pid()
+
+        stable_surplus_ok, restant_stabilite = self.stabilite_surplus_ok(surplus_pilote)
+
+        if soleil_suffisant_pour_demarrer and stable_surplus_ok and self.temps_depuis_off() >= self.tempo_min_off_solaire:
+            vitesse = max(self.calcule_vitesse_solaire(surplus_pilote), self.vitesse_min_filtration_utile)
+            if pac_chauffe or pac_prioritaire_jour:
+                vitesse = max(vitesse, self.vitesse_min_pac_active)
+
+            self.start_pump_with_delayed_speed(vitesse, delay_s=2, context="surplus_solaire")
+            short_msg, detail_msg = self.split_message_solaire(
+                "PAC + soleil" if pac_prioritaire_jour else "Surplus solaire",
+                vitesse,
+                filtre_temps_eq,
+                objectif_temps_eq
+            )
+            self.set_messages(short_msg, detail_msg)
+            self.format_texte_solaire_debug(vitesse, surplus_net, reseau_net, pv_power)
+            return
+
+        if en_plage_solaire and vitesse_rattrapage_dyn is not None and stable_surplus_ok and self.temps_depuis_off() >= self.tempo_min_off_solaire:
+            vitesse = max(vitesse_rattrapage_dyn, self.vitesse_min_filtration_utile)
+            if surplus_net > 0:
+                vitesse = max(vitesse, self.vitesse_solaire_maintien(surplus_net))
+            if pac_chauffe or pac_prioritaire_jour:
+                vitesse = max(vitesse, self.vitesse_min_pac_active)
+            if surplus_fragile:
+                vitesse = self.limite_vitesse_surplus_fragile(vitesse, pac_chauffe=pac_chauffe, pac_prioritaire=pac_prioritaire_jour, rattrapage=True)
+
+            self.start_pump_with_delayed_speed(vitesse, delay_s=2, context="rattrapage")
+            libelle = "PAC + rattrapage" if pac_prioritaire_jour else ("Surplus + rattrapage" if surplus_net > 0 else "Rattrapage retard")
+            short_msg, detail_msg = self.split_message_solaire(libelle, vitesse, filtre_temps_eq, objectif_temps_eq)
+            self.set_messages(short_msg, detail_msg)
+            self.format_texte_solaire_debug(vitesse, surplus_net, reseau_net, pv_power)
+            return
+
+        if en_plage_rattrapage_soir and complement_soir_autorise and self.temps_depuis_off() >= self.tempo_min_off_solaire:
+            self.reset_stabilite_surplus()
+            vitesse = min(self.vitesse_rattrapage, self.vitesse_max_complement_soir)
+            vitesse = max(vitesse, self.vitesse_min_filtration_utile)
+            if pac_chauffe:
+                vitesse = max(vitesse, self.vitesse_min_pac_active)
+
+            self.start_pump_with_delayed_speed(vitesse, delay_s=2, context="complement_soir")
+            short_msg, detail_msg = self.split_message_solaire("Complément soir", vitesse, filtre_temps_eq, objectif_temps_eq)
+            self.set_messages(short_msg, detail_msg)
+            self.format_texte_solaire_debug(vitesse, surplus_net, reseau_net, pv_power)
+            return
+
+        if soleil_suffisant_pour_demarrer and not stable_surplus_ok:
+            self.set_messages(
+                f"Surplus faible | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
+                f"attente on {max(0, int(self.tempo_min_off_solaire - self.temps_depuis_off()))}s | stabilité {restant_stabilite}s | surplus {int(round(max(0.0, surplus_pilote)))}W | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
+            )
+        elif surplus_brut <= 0:
+            self.reset_stabilite_surplus()
+            self.set_messages(
+                f"Conso maison forte | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
+                f"{filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
+            )
+        elif surplus_pilote < self.seuil_surplus_demarrage_w:
+            self.reset_stabilite_surplus()
+            self.set_messages(
+                f"{'PAC consomme surplus' if pac_chauffe else 'Surplus insuffisant'} | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
+                f"{filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
+            )
+        else:
+            self.set_messages(
+                f"Surplus OK | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
+                f"redémarrage dans {max(0, int(self.tempo_min_off_solaire - self.temps_depuis_off()))}s | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
+            )
+
+        self.set_debug_solaire_off(surplus_net, reseau_net, pv_power)
+        return
+
+    def _intelligent_plage_solaire(self, ctx, s):
+        """Intelligent, pump on inside the solar window."""
+        filtre_temps_eq, objectif_temps_eq = (ctx.filtre_temps_eq, ctx.objectif_temps_eq)
+        (
+            reseau_net,
+            surplus_net,
+            pv_power,
+            pac_prioritaire_jour,
+            pac_chauffe,
+            soleil_trop_faible_pour_rester,
+            surplus_fragile,
+            vitesse_rattrapage_dyn,
+        ) = (
+            s.reseau_net,
+            s.surplus_net,
+            s.pv_power,
+            s.pac_prioritaire_jour,
+            s.pac_chauffe,
+            s.soleil_trop_faible_pour_rester,
+            s.surplus_fragile,
+            s.vitesse_rattrapage_dyn,
+        )
+
+        self.reset_stabilite_surplus()
+        vitesse_actuelle = self.get_fan_percentage()
+        if vitesse_actuelle is None:
+            vitesse_actuelle = self.derniere_vitesse_commande if self.derniere_vitesse_commande is not None else self.vitesse_min_filtration_utile
+
+        if soleil_trop_faible_pour_rester and self.temps_depuis_on() < self.tempo_min_on_solaire:
+            self.debut_manque_soleil = None
+            self.reset_pid()
+
+            vitesse = self.get_fan_percentage()
+            if vitesse is None:
+                vitesse = self.derniere_vitesse_commande if self.derniere_vitesse_commande is not None else self.vitesse_min_filtration_utile
+
+            self.set_messages(
+                f"Surplus faible | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
+                f"arrêt dans {max(0, int(self.tempo_min_on_solaire - self.temps_depuis_on()))}s | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
+            )
+            self.format_texte_solaire_debug(vitesse, surplus_net, reseau_net, pv_power)
+            return
+
+        if soleil_trop_faible_pour_rester and self.temps_depuis_on() >= self.tempo_min_on_solaire:
+            return self._intelligent_manque_soleil(ctx, s, vitesse_actuelle)
+
+        self.debut_manque_soleil = None
+        vitesse_pid, _, _ = self.calcule_vitesse_pid_hybride(reseau_net, vitesse_actuelle)
+
+        if vitesse_rattrapage_dyn is not None and not surplus_fragile:
+            vitesse_pid = max(vitesse_pid, vitesse_rattrapage_dyn)
+        elif vitesse_rattrapage_dyn is not None and surplus_fragile:
+            vitesse_pid = max(vitesse_pid, min(vitesse_rattrapage_dyn, self.vitesse_max_rattrapage_surplus_faible))
+
+        if pac_chauffe or pac_prioritaire_jour:
+            vitesse_pid = max(vitesse_pid, self.vitesse_min_pac_active)
+
+        if surplus_fragile:
+            vitesse_pid = self.limite_vitesse_surplus_fragile(vitesse_pid, pac_chauffe=pac_chauffe, pac_prioritaire=pac_prioritaire_jour, rattrapage=bool(vitesse_rattrapage_dyn is not None))
+        else:
+            vitesse_pid = max(self.vitesse_min_filtration_utile, min(self.vitesse_max_solaire, vitesse_pid))
+
+        vitesse_appliquee = self.set_pump_percentage(vitesse_pid)
+
+        if vitesse_rattrapage_dyn is not None and pac_prioritaire_jour and not surplus_fragile:
+            libelle = "PAC + rattrapage"
+        elif vitesse_rattrapage_dyn is not None and surplus_net > 0 and not surplus_fragile:
+            libelle = "Surplus + rattrapage"
+        elif vitesse_rattrapage_dyn is not None and not surplus_fragile:
+            libelle = "Rattrapage retard"
+        elif pac_prioritaire_jour:
+            libelle = "PAC + soleil"
+        else:
+            libelle = "Surplus solaire"
+
+        short_msg, detail_msg = self.split_message_solaire(libelle, vitesse_appliquee, filtre_temps_eq, objectif_temps_eq)
+        self.set_messages(short_msg, detail_msg)
+        self.format_texte_solaire_debug(vitesse_appliquee, surplus_net, reseau_net, pv_power)
+        return
+
+    def _intelligent_manque_soleil(self, ctx, s, vitesse_actuelle):
+        """Intelligent, pump on, surplus too low after the minimum on-time."""
+        filtre_temps_eq, objectif_temps_eq = (ctx.filtre_temps_eq, ctx.objectif_temps_eq)
+        (
+            reseau_net,
+            surplus_brut,
+            surplus_net,
+            pv_power,
+            pac_prioritaire_jour,
+            tempo_anti_coupure_active,
+            pac_chauffe,
+            surplus_fragile,
+            vitesse_rattrapage_dyn,
+        ) = (
+            s.reseau_net,
+            s.surplus_brut,
+            s.surplus_net,
+            s.pv_power,
+            s.pac_prioritaire_jour,
+            s.tempo_anti_coupure_active,
+            s.pac_chauffe,
+            s.surplus_fragile,
+            s.vitesse_rattrapage_dyn,
+        )
+
+        if self.debut_manque_soleil is None:
+            self.debut_manque_soleil = datetime.datetime.now()
+
+        duree_manque = (datetime.datetime.now() - self.debut_manque_soleil).total_seconds()
+
+        if pac_prioritaire_jour and self.pac_maintien_jour_force:
+            self.reset_pid()
+            vitesse = max(self.vitesse_min_filtration_utile, self.vitesse_min_pac_active)
+            vitesse = self.limite_vitesse_surplus_fragile(vitesse, pac_chauffe=True, pac_prioritaire=True, rattrapage=False)
+            vitesse_appliquee = self.set_pump_percentage(vitesse)
+            short_msg, detail_msg = self.split_message_solaire("PAC prioritaire soleil", vitesse_appliquee, filtre_temps_eq, objectif_temps_eq, extra=f"maintien {int(duree_manque)}s")
+            self.set_messages(short_msg, detail_msg)
+            self.format_texte_solaire_debug(vitesse_appliquee, surplus_net, reseau_net, pv_power)
+            return
+
+        if pac_chauffe:
+            self.reset_pid()
+            vitesse = max(self.vitesse_min_filtration_utile, self.vitesse_min_pac_active)
+            vitesse = self.limite_vitesse_surplus_fragile(vitesse, pac_chauffe=True, pac_prioritaire=False, rattrapage=False)
+            vitesse_appliquee = self.set_pump_percentage(vitesse)
+            short_msg, detail_msg = self.split_message_solaire("Maintien pour PAC", vitesse_appliquee, filtre_temps_eq, objectif_temps_eq, extra=f"anti-coupure {int(duree_manque)}s")
+            self.set_messages(short_msg, detail_msg)
+            self.format_texte_solaire_debug(vitesse_appliquee, surplus_net, reseau_net, pv_power)
+            return
+
+        if vitesse_rattrapage_dyn is not None:
+            # The off->on branch already authorizes daytime
+            # catch-up without surplus. Apply that SAME policy
+            # while running, instead of stopping after calibration
+            # and restarting ten minutes later (history-3).
+            self.debut_manque_soleil = None
+            self.reset_pid()
+            vitesse = max(vitesse_rattrapage_dyn, self.vitesse_min_filtration_utile)
+            vitesse = self.limite_vitesse_surplus_fragile(
+                vitesse, pac_chauffe=False, pac_prioritaire=False, rattrapage=True,
+            )
+            vitesse_appliquee = self.set_pump_percentage(vitesse)
+            short_msg, detail_msg = self.split_message_solaire(
+                "Rattrapage de jour", vitesse_appliquee, filtre_temps_eq,
+                objectif_temps_eq, extra="quota en retard; réseau autorisé",
+            )
+            self.set_messages(short_msg, detail_msg)
+            self.format_texte_solaire_debug(vitesse_appliquee, surplus_net, reseau_net, pv_power)
+            return
+
+        if duree_manque >= tempo_anti_coupure_active:
+            self.turn_off_pompe_mem(
+                reason=(
+                    "consommation maison trop élevée"
+                    if surplus_brut <= 0
+                    else "surplus solaire insuffisant"
+                )
+            )
+            self.debut_manque_soleil = None
+            self.reset_pid()
+            self.set_messages(
+                f"{'Conso maison forte' if surplus_brut <= 0 else 'Surplus insuffisant'} | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",
+                f"{filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h"
+            )
+            self.set_debug_solaire_off(surplus_net, reseau_net, pv_power)
+            return
+
+        vitesse_pid, _, _ = self.calcule_vitesse_pid_hybride(reseau_net, vitesse_actuelle)
+        if vitesse_rattrapage_dyn is not None and not surplus_fragile:
+            vitesse_pid = max(vitesse_pid, vitesse_rattrapage_dyn)
+
+        vitesse_pid = self.limite_vitesse_surplus_fragile(vitesse_pid, pac_chauffe=False, pac_prioritaire=False, rattrapage=bool(vitesse_rattrapage_dyn is not None))
+        vitesse_appliquee = self.set_pump_percentage(vitesse_pid)
+        libelle = "Maintien + rattrapage" if vitesse_rattrapage_dyn is not None and not surplus_fragile else "Maintien surplus faible"
+        short_msg, detail_msg = self.split_message_solaire(libelle, vitesse_appliquee, filtre_temps_eq, objectif_temps_eq, extra=f"anti-coupure {int(duree_manque)}s")
+        self.set_messages(short_msg, detail_msg)
+        self.format_texte_solaire_debug(vitesse_appliquee, surplus_net, reseau_net, pv_power)
+        return
+
+    def _filtration_mode_inconnu(self, ctx):
+        """Unknown mode: report only, never command the pump."""
+        (
+            mode,
+            filtre_temps_eq,
+            objectif_temps_eq,
+        ) = (
+            ctx.mode,
+            ctx.filtre_temps_eq,
+            ctx.objectif_temps_eq,
+        )
 
         self.set_messages(
             f"Mode inconnu | {filtre_temps_eq:.1f}/{objectif_temps_eq:.1f}h",

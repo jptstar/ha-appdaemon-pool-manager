@@ -214,6 +214,15 @@ class Backend:
         self.clock.now = end
 
 
+def series_at(series, elapsed_h):
+    """Step-hold value of a recorded [[elapsed_h, value], ...] series (sorted)."""
+    value = series[0][1]
+    for at_h, v in series:
+        if at_h > elapsed_h: break
+        value = v
+    return value
+
+
 def weather(profile, hour):
     if profile == 'sun': return 29., 15., 'sunny'
     if profile == 'rain': return 21., 12., 'rainy'
@@ -267,6 +276,8 @@ def simulate(case, *, hours=48, step_s=300, trace=False):
                 args['entity_chauffage_timer']: 'idle', 'cover.pool': 'closed',
             }
             for entity, value in initial.items(): backend.set(entity, value)
+            # Optional replay hook: start from recorded helper values (by arg key).
+            for key, value in case.get('initial_args', {}).items(): backend.set(args[key], value)
             backend.set(args['cde_pompe'], 'off', {'percentage': 0})
             backend.set(args['entity_pac_climate'], 'off', {'temperature': 31., 'current_temperature': water, 'preset_mode': 'Smart'})
 
@@ -332,6 +343,9 @@ def simulate(case, *, hours=48, step_s=300, trace=False):
                 if case['solar'] == 'none': pv = 0.
                 if case['solar'] == 'clouds': pv *= .15 if index%4 < 2 else .9
                 if 'rain' in condition: pv *= .15
+                # Optional replay hooks: recorded solar production and house load.
+                if 'pv_series' in case: pv = series_at(case['pv_series'], elapsed)
+                house_load = series_at(case['load_series'], elapsed) if 'load_series' in case else float(case['load'])
                 speed = float(app.get_state(args['cde_pompe'], attribute='percentage') or 0) if app.pompe_est_on() else 0.
                 pump_w = 180+1100*(speed/100)**3 if speed else 2.
                 requested = app._pac_state() == 'heat'
@@ -353,7 +367,7 @@ def simulate(case, *, hours=48, step_s=300, trace=False):
                 gain = (.34 if preset == 'Turbo' else .27)*max(.45, min(1.2, (ambient+5)/30)) if heating else 0.
                 solar_gain = pv/5000*.018 if cover != 'closed' else 0.
                 water += (gain+solar_gain-loss)*step_s/3600
-                grid = float(case['load'])+pump_w+pac_w-pv
+                grid = house_load+pump_w+pac_w-pv
                 for key, watts in [('pump_kwh', pump_w), ('pac_kwh', pac_w), ('grid_kwh', max(0., grid)), ('export_kwh', max(0., -grid))]:
                     energy[key] += watts*step_s/3600000
                 values = {args['temperature_eau']: water,

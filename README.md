@@ -22,7 +22,17 @@ ni contourner les protections.
 
 Pool Manager is an AppDaemon application for advanced swimming-pool filtration orchestration in Home Assistant.
 
-### v0.10.18 — En validation : chauffe saisonnière et mesures stables
+### v0.10.19 — Hors gel prioritaire, boucle de sécurité isolée
+
+Le **hors gel est désormais prioritaire sur l'arrêt forcé** : en mode Hors Gel
+le bouton d'arrêt forcé n'arrête plus le brassage antigel, et la protection
+continue (`hors_gel_adaptatif: true`, désactivée par défaut — à activer) tourne
+aussi sous « Arrêt Forcé ». La filtration reste arrêtée ; pour une maintenance,
+débrancher la pompe. Les étapes de la boucle de sécurité sont isolées et leurs
+pannes journalisées puis rétablies. Cette version livre aussi la v0.10.18
+(jamais publiée seule). Voir [les vérifications et limites](docs/v0.10.19-RELEASE.md).
+
+### v0.10.18 — Chauffe saisonnière et mesures stables (livrée avec la v0.10.19)
 
 L'expiration d'une mesure certifiée ne doit plus faire remonter artificiellement
 la température estimée et retarder la chauffe. Les décisions de jour/nuit,

@@ -214,13 +214,15 @@ def main():
                dict(before=before.get('swim_dates'),after=after.get('swim_dates'),missed=after.get('missed_swim_dates')),
                {'selected_target_not_silently_lost':not selected or water>=30.8 or represented})
 
-    # Sudden sensor/context changes and frost/forced-stop priority.
+    # Sudden sensor/context changes and frost/forced-stop priority (freeze protection wins).
     for mode, temperature, running in itertools.product(TAB_MODE+[None],
             [None,-10,0,.9,1,2,3,3.1,10], [False,True]):
         result=decide_hors_gel_continu(temperature,running,mode,1,3)
         record('freeze',dict(mode=mode,temperature=temperature,running=running),dict(circulate=result),
-               {'forced_stop_wins':mode!=TAB_MODE[4] or not result,
-                'frost_starts':mode==TAB_MODE[4] or temperature is None or temperature>=1 or result})
+               {'frost_wins_over_forced_stop':mode!=TAB_MODE[4] or result==(
+                    running if temperature is None else
+                    True if temperature<=1 else False if temperature>=3 else running),
+                'frost_starts':temperature is None or temperature>1 or result})
 
     for raw in ['closed','open','opening','closing','unknown','unavailable',None]:
         normalized=normalize_cover_state(raw)

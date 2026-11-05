@@ -105,6 +105,17 @@ class SafetyMixin:
         self.pac_flow_fault_since = None
         self._safety_faults = set()
 
+        # Heat pump drawing power although Home Assistant shows it off (for
+        # example its own winter antifreeze protection after the ambient probe
+        # drifts). Recovery is progressive and bounded.
+        self.pac_ghost_recovery = b("pac_ghost_recovery", "true")
+        self.pac_ghost_confirm_s = int(self.args.get("pac_ghost_confirm_s", 180))
+        self.pac_ghost_retry_s = int(self.args.get("pac_ghost_retry_s", 150))
+        self.pac_ghost_cycle_heat_s = int(self.args.get("pac_ghost_cycle_heat_s", 90))
+        self.pac_ghost_max_cycles_6h = int(self.args.get("pac_ghost_max_cycles_6h", 4))
+        self.pac_ghost_cycles = []
+        self._pac_ghost_reset()
+
         self.pac_flow_active_w = float(
             self.args.get("pac_flow_active_w", self.args["seuil_pac_veille_w"])
         )
@@ -289,6 +300,10 @@ class SafetyMixin:
         start = heure_to_timedelta(self.heure_debut_pac_auto)
         end = heure_to_timedelta(self.heure_fin_pac_auto)
         return start <= current < end if start <= end else current >= start or current < end
+
+    def _hivernage(self):
+        check = getattr(self, "pac_hivernage", None)
+        return bool(check()) if callable(check) else False
 
     def _pac_state(self):
         try:
@@ -503,6 +518,12 @@ class SafetyMixin:
 
     def _pac_off(self, reason, post=True, respect_min_on=False):
         self._cancel_pac_start()
+        if self._hivernage():
+            # Electrically disconnected for the winter: never command the PAC.
+            return True
+        if getattr(self, "pac_ghost_phase", None) == "cycle":
+            # A recovery heat pulse is in progress; it ends with its own stop.
+            return False
         state = self._pac_state()
         if state is None:
             if self._pac_power_active():
@@ -548,6 +569,117 @@ class SafetyMixin:
         if post:
             self._start_pac_post_circulation()
         return True
+
+    # ----------------------- PAC running without a heat request -----------------------
+    def _pac_ghost_reset(self):
+        self.pac_ghost_since = None
+        self.pac_ghost_phase = None  # None | "off" | "cycle" | "settle"
+        self.pac_ghost_phase_at = None
+        self.pac_ghost_attempts = 0
+
+    def _pac_ghost_candidate(self):
+        """Compressor drawing power while HA shows the PAC off and nobody asked for heat."""
+        if not self._pac_power_active() or self._pac_state() != "off":
+            return False
+        derogation = getattr(self, "derogation_chauffage_active", None)
+        if callable(derogation) and derogation():
+            return False
+        # `_pac_post_active()` is deliberately not used here: while the PAC draws
+        # power and reads off, `_pac_off` renews the post-circulation window at
+        # every tick, so it would hide exactly the case we want to catch.
+        if getattr(self, "pac_deferred_stop_reason", None) is not None:
+            return False
+        stopped_at = getattr(self, "pac_last_stop_at", None)
+        if stopped_at is not None and (datetime.datetime.now() - stopped_at).total_seconds() < 600:
+            return False  # physical tail after our own stop
+        return True
+
+    def _pac_ghost_command(self, hvac_mode):
+        self.call_service("climate/set_hvac_mode", entity_id=self.entity_pac_climate, hvac_mode=hvac_mode)
+
+    def _manage_pac_ghost(self):
+        if not self.pac_ghost_recovery or self._hivernage():
+            self._pac_ghost_reset()
+            self._recover("pac_ghost")
+            return
+        now = datetime.datetime.now()
+
+        if self.pac_ghost_phase == "cycle":
+            # Circulation must hold while the recovery heat pulse runs.
+            self._ensure_pac_flow()
+            if (now - self.pac_ghost_phase_at).total_seconds() >= self.pac_ghost_cycle_heat_s:
+                try:
+                    self._pac_ghost_command("off")
+                except Exception as exc:
+                    self._fault("pac_stop", f"échec arrêt PAC (reprise): {exc}")
+                    return
+                self._pac_mark_stopped()
+                self.log("PAC reprise: impulsion terminée, arrêt renvoyé", log="piscine_log")
+                self._start_pac_post_circulation()
+                self.pac_ghost_phase = "settle"
+                self.pac_ghost_phase_at = now
+            return
+
+        if not self._pac_ghost_candidate():
+            if self.pac_ghost_since is not None:
+                self._recover("pac_ghost", "PAC arrêtée: consigne et consommation concordent")
+                self._pac_ghost_reset()
+            return
+
+        if self.pac_ghost_since is None:
+            self.pac_ghost_since = now
+        if self.pac_ghost_phase is None:
+            if (now - self.pac_ghost_since).total_seconds() < self.pac_ghost_confirm_s:
+                return
+        elif (now - self.pac_ghost_phase_at).total_seconds() < self.pac_ghost_retry_s:
+            return
+
+        power = self._raw_float(getattr(self, "entity_pac_conso", None)) or 0.0
+        self._fault(
+            "pac_ghost",
+            f"PAC active ({power:.0f} W) alors que le mode affiché est off "
+            "(protection antigel interne ou sonde d'air en défaut ?)",
+        )
+        self.pac_ghost_cycles = [
+            at for at in self.pac_ghost_cycles if (now - at).total_seconds() < 6 * 3600
+        ]
+        if self.pac_ghost_attempts >= 1 and len(self.pac_ghost_cycles) >= self.pac_ghost_max_cycles_6h:
+            if self.pac_ghost_phase != "gave_up":
+                self.log(
+                    "PAC reprise: abandon après plusieurs impulsions, intervention manuelle requise",
+                    log="piscine_log",
+                )
+            self.pac_ghost_phase = "gave_up"
+            self.pac_ghost_phase_at = now
+            return
+
+        self.pac_ghost_attempts += 1
+        if self.pac_ghost_attempts == 1:
+            try:
+                self._pac_ghost_command("off")
+            except Exception as exc:
+                self._fault("pac_stop", f"échec arrêt PAC (reprise): {exc}")
+                return
+            self.log("PAC reprise: arrêt renvoyé (PAC active malgré le mode off)", log="piscine_log")
+            self.pac_ghost_phase = "off"
+            self.pac_ghost_phase_at = now
+            return
+
+        # The plain stop was ignored: reproduce the manual recipe (short heat
+        # pulse with confirmed circulation, then off), bounded per 6 hours.
+        if not self._pump_flow_ok():
+            self._ensure_pac_flow()
+            self.pac_ghost_attempts -= 1
+            return
+        try:
+            self._pac_ghost_command("heat")
+        except Exception as exc:
+            self._fault("pac_start", f"échec impulsion PAC (reprise): {exc}")
+            return
+        self.pac_ghost_cycles.append(now)
+        self.log("PAC reprise: impulsion heat puis off (arrêt ignoré)", log="piscine_log")
+        self.pac_ghost_phase = "cycle"
+        self.pac_ghost_phase_at = now
 
     def _pac_post_active(self):
         until = getattr(self, "pac_post_circulation_until", None)
@@ -604,6 +736,10 @@ class SafetyMixin:
             self._pac_off("conditions froides")
 
     def _protect_pac_flow(self):
+        if self._hivernage():
+            self.pac_flow_fault_since = None
+            self._recover("pac_flow")
+            return
         pac_power_active = self._pac_power_active()
         if pac_power_active and self.pac_compressor_started_at is None:
             self.pac_compressor_started_at = datetime.datetime.now()
@@ -626,6 +762,8 @@ class SafetyMixin:
             self._pac_off("circulation pompe non confirmée", post=False)
 
     def _pac_circulation_securite_requise(self):
+        if self._hivernage():
+            return False
         if (
             getattr(self, "pac_auto_start_pending", False)
             or getattr(self, "pac_deferred_stop_reason", None) is not None
@@ -673,6 +811,9 @@ class SafetyMixin:
             self._run_safety_step(
                 "safety_tick_pac_auto", "politique PAC auto", self._manage_pac_auto
             )
+        self._run_safety_step(
+            "safety_tick_pac_ghost", "reprise PAC hors consigne", self._manage_pac_ghost
+        )
         self._run_safety_step(
             "safety_tick", "boucle sécurité", lambda: self.traitement({})
         )

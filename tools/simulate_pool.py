@@ -319,6 +319,10 @@ def simulate(case, *, hours=48, step_s=300, trace=False):
             for key in ('entity_temperature_exterieure', 'entity_temperature_exterieure_moyenne_24h', 'entity_temperature_exterieure_moyenne_7j'):
                 backend.set(args[key], (high+low)/2)
             restart_done = False
+            # Optional fault: the PAC compressor starts by itself (internal antifreeze) while
+            # its mode reads off; only a stop command (after a heat pulse if needs_cycle) ends it.
+            ghost = case.get('ghost')
+            ghost_state = dict(started=False, active=False, since=None, cleared_h=None, commands=0)
             app = launch()
             deadline_water = None
             for index in range(math.ceil(hours*3600/step_s)):
@@ -351,6 +355,22 @@ def simulate(case, *, hours=48, step_s=300, trace=False):
                 requested = app._pac_state() == 'heat'
                 preset = app.get_state(args['entity_pac_climate'], attribute='preset_mode')
                 heating = requested and speed >= 47 and water < 30.95 and case['fault'] != 'pac_idle'
+                if ghost:
+                    if elapsed >= ghost['at_h'] and not ghost_state['started']:
+                        ghost_state.update(started=True, active=True, since=clock.now.isoformat())
+                    if ghost_state['active']:
+                        commands = [(at, c[2]['hvac_mode']) for c in backend.calls
+                                    for at in [c[0]] if c[1] == 'climate/set_hvac_mode' and at >= ghost_state['since']]
+                        ghost_state['commands'] = len(commands)
+                        modes = [m for _, m in commands]
+                        if ghost.get('needs_cycle', True):
+                            cleared = 'heat' in modes and 'off' in modes[modes.index('heat'):]
+                        else:
+                            cleared = 'off' in modes
+                        if cleared:
+                            ghost_state.update(active=False, cleared_h=round(elapsed - ghost['at_h'], 3))
+                        else:
+                            heating = True  # compressor runs by itself, flow or not
                 pac_w = (2200 if preset == 'Turbo' else 1450) if heating else 4.
                 if requested and speed < 47:
                     violations.add('pac_requested_without_minimum_flow')
@@ -361,7 +381,7 @@ def simulate(case, *, hours=48, step_s=300, trace=False):
                             'predictive_requested': getattr(app, 'chauffage_predictif_heat_requested', None),
                             'recent_commands': backend.calls[-6:]})
                 if case['mode'] == 'Arrêt Forcé' and (requested or speed): violations.add('forced_stop_not_respected')
-                if case['heating'] == 'Désactivé' and requested: violations.add('disabled_heating_requested')
+                if case['heating'] == 'Désactivé' and requested and not ghost: violations.add('disabled_heating_requested')
                 # Independent first-order physical approximation, NOT MPC helpers.
                 loss = max(0., water-ambient)*(.003 if cover == 'closed' else .009)
                 gain = (.34 if preset == 'Turbo' else .27)*max(.45, min(1.2, (ambient+5)/30)) if heating else 0.
@@ -399,6 +419,7 @@ def simulate(case, *, hours=48, step_s=300, trace=False):
                                     'decision_choice': getattr(app, '_pool_decision_choice', None),
                                     'heating_mode': app.get_state(args['entity_chauffage']),
                                     'timer_state': app.get_state(args['entity_chauffage_timer'])})
+            if ghost and ghost_state['active']: violations.add('pac_ghost_not_stopped')
             faults = [message for _, message in backend.logs if 'Erreur' in message or 'ERROR' in message]
             if faults: violations.add('controller_logged_error')
             return {'case': case, 'hours': hours, 'water_end_c': round(water, 3),
@@ -407,7 +428,8 @@ def simulate(case, *, hours=48, step_s=300, trace=False):
                     'applied_decision_events': applied_events,
                     'energy': {k: round(v, 3) for k,v in energy.items()}, 'violations': sorted(violations),
                     'errors': faults[:10], 'service_calls': len(backend.calls), 'trace': records,
-                    'flow_violation_samples': flow_violation_samples}
+                    'flow_violation_samples': flow_violation_samples,
+                    **({'ghost': ghost_state} if ghost else {})}
     finally:
         clock.restore()
         if previous_hassapi is None: sys.modules.pop('hassapi', None)

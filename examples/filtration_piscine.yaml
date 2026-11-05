@@ -98,6 +98,8 @@ pool_manager:
   # Désactivé / Automatique / Début de saison • Smart / Fin de saison • Smart /
   # Turbo • 1 h / 2 h / 3 h / 6 h / 12 h / 1 jour / 2 jours / 3 jours.
   # The old `Première chauffe • Smart` wording is still accepted for migration.
+  # v0.10.20: add `Hivernage • PAC hors tension` when the PAC is switched off at the
+  # breaker / drained for the winter; Pool Manager then leaves it completely alone.
   entity_chauffage: input_select.pool_heating
 
   entity_chauffage_timer: timer.pool_heating
@@ -254,6 +256,14 @@ pool_manager:
   pac_post_circulation_max_s: 180
   pac_flow_fail_timeout_s: 15
   pac_flow_active_w: 200
+  # v0.10.20: if the PAC draws power while Home Assistant shows it off (its own winter
+  # antifreeze protection, ambient probe drifting), stop it: first a plain `off`, then
+  # a short `heat` pulse followed by `off`. Bounded to pac_ghost_max_cycles_6h pulses.
+  pac_ghost_recovery: true
+  pac_ghost_confirm_s: 180
+  pac_ghost_retry_s: 150
+  pac_ghost_cycle_heat_s: 90
+  pac_ghost_max_cycles_6h: 4
 
   pac_priorite_soleil: true
   heure_debut_pac_soleil: "10:00:00"

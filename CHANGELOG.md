@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.20 - Heat pump running while shown off, and wintering mode
+
+- Fix: when the heat pump drew power while Home Assistant showed it `off` (its own winter antifreeze protection started after the ambient probe drifted to -9 C while the real air was about 4 C, 2 November 2026), Pool Manager never sent a stop: `_pac_off` returned early on state `off`, and kept renewing the post-circulation window instead. It now detects the situation after `pac_ghost_confirm_s` (180 s) and recovers progressively: a plain `off`, then, if ignored, a short `heat` pulse (circulation confirmed) followed by `off`, at most `pac_ghost_max_cycles_6h` (4) pulses per 6 hours, then a journal message asking for manual intervention. Disable with `pac_ghost_recovery: false`.
+- New heating selector option `Hivernage • PAC hors tension`: Pool Manager never commands or supervises the heat pump, raises no PAC fault or flow alarm, ignores the PAC power sensor, and does not let the seasonal cutoff overwrite the choice. Add the option to your `input_select` before using it.
+- Validation tooling: `tools/check_pac_ghost.py` (recovery, wintering, no false positive), an optional `ghost` fault in the simulator (existing results unchanged), and 13 tests.
+
 ## 0.10.19 - Safety-loop isolation and code hygiene (unreleased, depends on 0.10.18)
 
 - Isolate the safety loop stages (PAC flow protection, PAC auto policy, filtration pass). Each stage has its own fault key, logs a full traceback on its first failure and is recovered on success, so a recurring failure is no longer silenced after the first one and a recovery is reported. A PAC-side error no longer skips the safety tick's own filtration pass; filtration is also driven by an independent periodic timer, so this mainly improves visibility and recovery rather than preventing a pump freeze.

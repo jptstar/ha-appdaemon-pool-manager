@@ -17,6 +17,9 @@ input_select:
       - "Turbo • 1 jour"
       - "Turbo • 2 jours"
       - "Turbo • 3 jours"
+      # v0.10.20: PAC électriquement hors tension pour l'hiver. Pool Manager ne la
+      # commande plus, ne la supervise plus et ne lève plus aucune alarme à son sujet.
+      - "Hivernage • PAC hors tension"
     icon: mdi:heat-pump
 
 input_text:

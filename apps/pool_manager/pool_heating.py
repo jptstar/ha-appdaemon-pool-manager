@@ -15,6 +15,9 @@ CHAUFFAGE_DEBUT_SAISON = "Début de saison • Smart"
 # Compatibility alias accepted when an existing HA selector still uses v0.5 wording.
 CHAUFFAGE_PREMIERE_CHAUFFE = "Première chauffe • Smart"
 CHAUFFAGE_FIN_SAISON = "Fin de saison • Smart"
+# The heat pump is electrically disconnected / drained for the winter: Pool
+# Manager never commands, supervises or raises alarms about it.
+CHAUFFAGE_HIVERNAGE = "Hivernage • PAC hors tension"
 
 TURBO_DURATIONS_H = {
     "Turbo • 1 h": 1,
@@ -33,6 +36,7 @@ CHAUFFAGE_MODES = {
     CHAUFFAGE_DEBUT_SAISON,
     CHAUFFAGE_PREMIERE_CHAUFFE,
     CHAUFFAGE_FIN_SAISON,
+    CHAUFFAGE_HIVERNAGE,
     *TURBO_DURATIONS_H.keys(),
 }
 
@@ -48,6 +52,8 @@ def chauffage_mode_kind(value):
         return "end_season"
     if value == CHAUFFAGE_DESACTIVE:
         return "disabled"
+    if value == CHAUFFAGE_HIVERNAGE:
+        return "wintering"
     if value == CHAUFFAGE_AUTO:
         return "auto"
     return "unknown"
@@ -392,6 +398,23 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         except Exception:
             return None
 
+    def pac_hivernage(self):
+        """True when the PAC is declared electrically disconnected for the winter."""
+        return chauffage_mode_kind(self.chauffage_mode()) == "wintering"
+
+    def _manage_pac_hivernage(self):
+        """Wintering: never command, supervise or alarm about the heat pump."""
+        self.chauffage_predictif_heat_requested = False
+        self.chauffage_predictif_heat_target_c = None
+        self.chauffage_predictif_last_plan = None
+        self._cancel_chauffage_start()
+        self._cancel_pac_start()
+        self._cancel_turbo_timer()
+        self._pac_ghost_reset()
+        for key in ("pac_climate", "pac_flow", "pac_start", "pac_stop", "pac_preset", "pac_ghost"):
+            self._recover(key)
+        self._update_predictive_diagnostics("disabled", override="🧊 Hivernage — PAC hors tension")
+
     def chauffage_mode_explicite(self):
         return chauffage_mode_kind(self.chauffage_mode()) in {
             "season_start",
@@ -423,7 +446,7 @@ class HeatingModeMixin(PredictiveHeatingSupport):
 
     def _set_chauffage_precedent(self, mode):
         mode = str(mode or "").strip()
-        if chauffage_mode_kind(mode) == "unknown" or chauffage_mode_kind(mode) == "turbo":
+        if chauffage_mode_kind(mode) in {"unknown", "turbo", "wintering"}:
             return
         self.chauffage_mode_precedent = mode
         if not self.entity_chauffage_precedent:
@@ -533,6 +556,11 @@ class HeatingModeMixin(PredictiveHeatingSupport):
                 self._season_set_closed(False)
             self._season_last_decision = None
 
+        if new_kind == "wintering" and old_kind != "wintering":
+            # One last clean stop before the breaker is lowered; afterwards Pool
+            # Manager leaves the (possibly unpowered) heat pump alone.
+            self._cancel_turbo_timer()
+            self._pac_off("hivernage", post=True)
         if new_kind == "turbo":
             if old_kind != "turbo":
                 self._set_chauffage_precedent(old_mode)
@@ -763,6 +791,9 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         if not self.entity_chauffage:
             return self._manage_pac_saisonnier()
 
+        if self.pac_hivernage():
+            return self._manage_pac_hivernage()
+
         # Safety paths can bypass the planner; invalidate its old offer too.
         pending = getattr(self, "_pool_pending", None)
         decision_blocked = getattr(self, "_pool_decision_blocked", None)
@@ -903,6 +934,8 @@ class HeatingModeMixin(PredictiveHeatingSupport):
         )
 
     def _pac_circulation_chauffage_requise(self):
+        if self.pac_hivernage():
+            return False
         # Certified water measurement requires circulation even though the PAC
         # itself may deliberately remain off during the 70% / 15-minute mixing
         # cycle. Reuse the existing pump-demand path instead of creating a

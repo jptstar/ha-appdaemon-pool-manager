@@ -602,43 +602,7 @@ class PredictiveHeatingSupport(DecisionSupport):
                 )
             ),
         )
-        # Hard ceiling for one calibration, whatever the tick source. A
-        # calibration that has to be cut short is not retried for hours, so a
-        # pump can never bounce between its normal speed and the calibration
-        # speed.
-        self.chauffage_predictif_mesure_duree_max_s = max(
-            600,
-            int(
-                float(
-                    self.args.get(
-                        "chauffage_predictif_mesure_duree_max_s",
-                        1800,
-                    )
-                )
-            ),
-        )
-        self.chauffage_predictif_mesure_retry_apres_plafond_s = max(
-            1800,
-            int(
-                float(
-                    self.args.get(
-                        "chauffage_predictif_mesure_retry_apres_plafond_s",
-                        21600,
-                    )
-                )
-            ),
-        )
-        self.chauffage_predictif_measurement_retry_s_active = (
-            self.chauffage_predictif_mesure_retry_s
-        )
-        # Optional tariff sensor (e.g. sensor.teleinfo_ptec). While it reports
-        # the red-day peak period, no high-speed calibration may run.
-        self.tarif_jour_rouge_entity = self.args.get(
-            "tarif_jour_rouge_entity"
-        )
-        self.tarif_jour_rouge_etat = str(
-            self.args.get("tarif_jour_rouge_etat", "HPJR")
-        )
+        self._load_measurement_guard_args()
         self.chauffage_predictif_mesure_anticipation_jours = max(
             1,
             min(
@@ -980,6 +944,46 @@ class PredictiveHeatingSupport(DecisionSupport):
             )
         except Exception:
             return minimum
+
+    def _load_measurement_guard_args(self):
+        """Read the calibration guard options (ceiling, cool-down, tariff)."""
+        # Hard ceiling for one calibration, whatever the tick source. A
+        # calibration that has to be cut short is not retried for hours, so a
+        # pump can never bounce between its normal speed and the calibration
+        # speed.
+        self.chauffage_predictif_mesure_duree_max_s = max(
+            600,
+            int(
+                float(
+                    self.args.get(
+                        "chauffage_predictif_mesure_duree_max_s",
+                        1800,
+                    )
+                )
+            ),
+        )
+        self.chauffage_predictif_mesure_retry_apres_plafond_s = max(
+            1800,
+            int(
+                float(
+                    self.args.get(
+                        "chauffage_predictif_mesure_retry_apres_plafond_s",
+                        21600,
+                    )
+                )
+            ),
+        )
+        self.chauffage_predictif_measurement_retry_s_active = (
+            self.chauffage_predictif_mesure_retry_s
+        )
+        # Optional tariff sensor (e.g. sensor.teleinfo_ptec). While it reports
+        # the red-day peak period, no high-speed calibration may run.
+        self.tarif_jour_rouge_entity = self.args.get(
+            "tarif_jour_rouge_entity"
+        )
+        self.tarif_jour_rouge_etat = str(
+            self.args.get("tarif_jour_rouge_etat", "HPJR")
+        )
 
     def _measurement_forbidden_reason(self):
         """Why a high-speed temperature calibration must not run right now.

@@ -134,3 +134,187 @@ def test_housekeeping_tick_enforces_the_ceiling_without_heating_logic(tmp_path):
     stability.RuntimeStabilityMixin.check_etats_speciaux(app, {})
     assert not app.chauffage_predictif_measurement_active
     assert app.chauffage_predictif_measurement_retry_s_active == 21600
+
+
+# ----------------------------- option parsing -----------------------------
+
+def _loaded(tmp_path, **args):
+    app = _make_runtime(tmp_path)
+    app.args = dict(args)
+    app._load_measurement_guard_args()
+    return app
+
+
+def test_guard_options_defaults(tmp_path):
+    app = _loaded(tmp_path)
+    assert app.chauffage_predictif_mesure_duree_max_s == 1800
+    assert app.chauffage_predictif_mesure_retry_apres_plafond_s == 21600
+    assert app.chauffage_predictif_measurement_retry_s_active == 900
+    assert app.tarif_jour_rouge_entity is None
+    assert app.tarif_jour_rouge_etat == "HPJR"
+
+
+def test_guard_options_are_read_from_the_configuration(tmp_path):
+    app = _loaded(
+        tmp_path,
+        chauffage_predictif_mesure_duree_max_s="2400",
+        chauffage_predictif_mesure_retry_apres_plafond_s=7200,
+        tarif_jour_rouge_entity="sensor.teleinfo_ptec",
+        tarif_jour_rouge_etat="HPJR",
+    )
+    assert app.chauffage_predictif_mesure_duree_max_s == 2400
+    assert app.chauffage_predictif_mesure_retry_apres_plafond_s == 7200
+    assert app.tarif_jour_rouge_entity == "sensor.teleinfo_ptec"
+
+
+def test_guard_options_cannot_be_set_dangerously_low(tmp_path):
+    app = _loaded(
+        tmp_path,
+        chauffage_predictif_mesure_duree_max_s=1,
+        chauffage_predictif_mesure_retry_apres_plafond_s=1,
+    )
+    # A ceiling below the circulation time would make every calibration fail;
+    # a cool-down under 30 min would allow the speed to bounce.
+    assert app.chauffage_predictif_mesure_duree_max_s == 600
+    assert app.chauffage_predictif_mesure_retry_apres_plafond_s == 1800
+
+
+def test_custom_tariff_state_is_honoured(tmp_path):
+    app = _armed(tmp_path, tariff="ROUGE")
+    app.tarif_jour_rouge_etat = "ROUGE"
+    app._update_certified_measurement(T0)
+    assert not app.chauffage_predictif_measurement_active
+
+
+def test_missing_tariff_entity_disables_only_the_red_day_rule(tmp_path):
+    app = _armed(tmp_path, tariff="HPJR")
+    app.tarif_jour_rouge_entity = None
+    app._update_certified_measurement(T0)
+    assert app.chauffage_predictif_measurement_active
+    # ... while the other protections stay active.
+    app2 = _armed(tmp_path, mode="Hors Gel", tariff="HPJR")
+    app2.tarif_jour_rouge_entity = None
+    app2._update_certified_measurement(T0)
+    assert not app2.chauffage_predictif_measurement_active
+
+
+def test_unreadable_tariff_sensor_does_not_block_or_crash(tmp_path):
+    app = _armed(tmp_path)
+
+    def broken(entity, attribute=None):
+        if entity == "sensor.tarif":
+            raise RuntimeError("sensor offline")
+        return {"input_select.mode": "Intelligent"}.get(entity)
+
+    app.get_state = broken
+    app._update_certified_measurement(T0)
+    assert app.chauffage_predictif_measurement_active
+
+
+# ----------------------------- return values -----------------------------
+
+def test_forbidden_calibration_reports_false_and_releases_the_pump(tmp_path):
+    app = _armed(tmp_path)
+    app._update_certified_measurement(T0)
+    assert app.chauffage_predictif_measurement_active
+    app.states["tariff"] = "HPJR"
+    released = []
+    app.traitement = lambda kwargs=None: released.append(True)
+    assert app._update_certified_measurement(T0 + datetime.timedelta(minutes=1)) is False
+    assert released, "speed authority must be handed back to the normal strategy"
+
+
+# ----------------------------- timeouts -----------------------------
+
+def test_ceiling_uses_the_start_time_when_no_request_time_exists(tmp_path):
+    app = _armed(tmp_path)
+    app._update_certified_measurement(T0)
+    app.chauffage_predictif_measurement_requested_at = None
+    app.chauffage_predictif_measurement_started_at = T0
+    app.water = 18.0
+    assert app._update_certified_measurement(T0 + datetime.timedelta(minutes=31)) is False
+    assert not app.chauffage_predictif_measurement_active
+    assert app.chauffage_predictif_measurement_retry_s_active == 21600
+
+
+def test_ceiling_not_reached_keeps_the_calibration_running(tmp_path):
+    app = _armed(tmp_path)
+    app._update_certified_measurement(T0)
+    app.water = 18.0
+    app._update_certified_measurement(T0 + datetime.timedelta(minutes=20))
+    assert app.chauffage_predictif_measurement_active
+    assert app.chauffage_predictif_measurement_failed_at is None
+
+
+def test_ordinary_timeouts_keep_the_short_retry_delay(tmp_path):
+    """Only the ceiling imposes the long cool-down."""
+    app = _armed(tmp_path)
+    now = T0 + datetime.timedelta(minutes=5)
+    app._abort_measurement_timeout(now, "sonde indisponible")
+    assert app.chauffage_predictif_measurement_retry_s_active == 900
+    assert app._measurement_retry_blocked(now + datetime.timedelta(minutes=14))
+    assert not app._measurement_retry_blocked(now + datetime.timedelta(minutes=16))
+    app._abort_measurement_timeout(now, "plafond", long_retry=True)
+    assert app._measurement_retry_blocked(now + datetime.timedelta(hours=5, minutes=59))
+    assert not app._measurement_retry_blocked(now + datetime.timedelta(hours=6, minutes=1))
+
+
+def test_a_successful_certification_clears_the_cool_down(tmp_path):
+    app = _armed(tmp_path)
+    app._abort_measurement_timeout(T0, "plafond", long_retry=True)
+    assert app._measurement_retry_blocked(T0 + datetime.timedelta(minutes=30))
+    app._register_certified_measurement(T0 + datetime.timedelta(hours=7), 9.8)
+    assert not app._measurement_retry_blocked(T0 + datetime.timedelta(hours=7))
+
+
+# ----------------------------- housekeeping tick -----------------------------
+
+def test_housekeeping_tick_leaves_an_idle_engine_alone(tmp_path):
+    import pool_runtime_stability as stability
+
+    app = _armed(tmp_path)
+    calls = []
+    app._update_certified_measurement = lambda *a, **k: calls.append(1)
+    app._check_etats_speciaux_core = lambda kwargs: None
+    app._maintain_remote_pump_authority = lambda: None
+    app.chauffage_predictif_measurement_active = False
+    stability.RuntimeStabilityMixin.check_etats_speciaux(app, {})
+    del app.chauffage_predictif_measurement_active
+    stability.RuntimeStabilityMixin.check_etats_speciaux(app, {})
+    assert calls == []
+
+
+def test_housekeeping_tick_survives_an_engine_error(tmp_path):
+    import pool_runtime_stability as stability
+
+    app = _armed(tmp_path)
+    app.chauffage_predictif_measurement_active = True
+    app._check_etats_speciaux_core = lambda kwargs: None
+    done = []
+    app._maintain_remote_pump_authority = lambda: done.append(1)
+
+    def boom(*a, **k):
+        raise RuntimeError("engine failure")
+
+    app._update_certified_measurement = boom
+    stability.RuntimeStabilityMixin.check_etats_speciaux(app, {})  # must not raise
+    assert done == [1]
+
+
+# ----------------------------- wiring -----------------------------
+
+def test_initialisation_loads_the_guard_options():
+    """The options must be read when the app starts, not only in the tests."""
+    import inspect
+
+    source = inspect.getsource(
+        __import__("pool_predictive_runtime").PredictiveHeatingSupport._initialize_predictive_heating
+    )
+    assert "self._load_measurement_guard_args()" in source
+
+
+def test_tariff_state_defaults_to_the_peak_red_day_code(tmp_path):
+    app = _armed(tmp_path, tariff="HPJR")
+    del app.tarif_jour_rouge_etat
+    app._update_certified_measurement(T0)
+    assert not app.chauffage_predictif_measurement_active

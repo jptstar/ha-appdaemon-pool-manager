@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.22 - Calibration guards: testable options and mutation-tested
+
+- No behavior change. The guard options (`chauffage_predictif_mesure_duree_max_s`, `chauffage_predictif_mesure_retry_apres_plafond_s`, `tarif_jour_rouge_entity`, `tarif_jour_rouge_etat`) are read by a dedicated method, `_load_measurement_guard_args`, so that defaults and minimum values are covered by tests.
+- 15 more tests in `tests/test_measurement_guards.py` (25 in total). Mutation testing of every line added in 0.10.21 left no killable mutant alive; the remaining ones are docstrings, log texts, and equivalent `pass`/falsy-value variants.
+
 ## 0.10.20 - Heat pump running while shown off, and wintering mode
 
 - Fix: when the heat pump drew power while Home Assistant showed it `off` (its own winter antifreeze protection started after the ambient probe drifted to -9 C while the real air was about 4 C, 2 November 2026), Pool Manager never sent a stop: `_pac_off` returned early on state `off`, and kept renewing the post-circulation window instead. It now detects the situation after `pac_ghost_confirm_s` (180 s) and recovers progressively: a plain `off`, then, if ignored, a short `heat` pulse (circulation confirmed) followed by `off`, at most `pac_ghost_max_cycles_6h` (4) pulses per 6 hours, then a journal message asking for manual intervention. Disable with `pac_ghost_recovery: false`.

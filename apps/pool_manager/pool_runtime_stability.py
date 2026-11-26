@@ -99,3 +99,11 @@ class RuntimeStabilityMixin:
         """Run normal housekeeping, then keep remote pump ownership alive."""
         self._check_etats_speciaux_core(kwargs)
         self._maintain_remote_pump_authority()
+        # The certified-measurement engine is otherwise ticked only by the
+        # heating logic and by cover events. Keep its ceiling and release rules
+        # alive here, so a calibration cannot hold the pump when heating is off.
+        if getattr(self, "chauffage_predictif_measurement_active", False):
+            try:
+                self._update_certified_measurement()
+            except Exception:
+                pass

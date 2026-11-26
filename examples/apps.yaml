@@ -130,6 +130,16 @@ pool_manager:
   chauffage_predictif_mesure_fraiche_s: 21600
   chauffage_predictif_mesure_timeout_grace_s: 300
   chauffage_predictif_mesure_retry_s: 900
+  # Hard ceiling for one calibration (the engine is ticked every 30 s, even
+  # with heating closed). A calibration cut at the ceiling is not retried for
+  # 6 h, so the pump never bounces between its normal and calibration speeds.
+  chauffage_predictif_mesure_duree_max_s: 1800
+  chauffage_predictif_mesure_retry_apres_plafond_s: 21600
+  # No calibration while this sensor reports the given state (red-day peak
+  # period). Optional; leave the entity out to disable. A calibration is also
+  # never run in Hors Gel mode or while heating is stopped for the season.
+  tarif_jour_rouge_entity: sensor.teleinfo_ptec
+  tarif_jour_rouge_etat: HPJR
 
   # MPC search resolution and cold-start PAC power assumptions.
   chauffage_predictif_mpc_pas_h: 1.0

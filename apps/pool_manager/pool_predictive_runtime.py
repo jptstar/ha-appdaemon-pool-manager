@@ -602,6 +602,43 @@ class PredictiveHeatingSupport(DecisionSupport):
                 )
             ),
         )
+        # Hard ceiling for one calibration, whatever the tick source. A
+        # calibration that has to be cut short is not retried for hours, so a
+        # pump can never bounce between its normal speed and the calibration
+        # speed.
+        self.chauffage_predictif_mesure_duree_max_s = max(
+            600,
+            int(
+                float(
+                    self.args.get(
+                        "chauffage_predictif_mesure_duree_max_s",
+                        1800,
+                    )
+                )
+            ),
+        )
+        self.chauffage_predictif_mesure_retry_apres_plafond_s = max(
+            1800,
+            int(
+                float(
+                    self.args.get(
+                        "chauffage_predictif_mesure_retry_apres_plafond_s",
+                        21600,
+                    )
+                )
+            ),
+        )
+        self.chauffage_predictif_measurement_retry_s_active = (
+            self.chauffage_predictif_mesure_retry_s
+        )
+        # Optional tariff sensor (e.g. sensor.teleinfo_ptec). While it reports
+        # the red-day peak period, no high-speed calibration may run.
+        self.tarif_jour_rouge_entity = self.args.get(
+            "tarif_jour_rouge_entity"
+        )
+        self.tarif_jour_rouge_etat = str(
+            self.args.get("tarif_jour_rouge_etat", "HPJR")
+        )
         self.chauffage_predictif_mesure_anticipation_jours = max(
             1,
             min(
@@ -944,6 +981,36 @@ class PredictiveHeatingSupport(DecisionSupport):
         except Exception:
             return minimum
 
+    def _measurement_forbidden_reason(self):
+        """Why a high-speed temperature calibration must not run right now.
+
+        Returns None when a calibration is allowed. Checked at every arming and
+        at every tick of an active calibration, so a run that was armed before
+        the condition appeared is released at once.
+        """
+        entity = getattr(self, "tarif_jour_rouge_entity", None)
+        if entity:
+            try:
+                state = str(self.get_state(entity)).strip()
+            except Exception:
+                state = ""
+            if state == getattr(self, "tarif_jour_rouge_etat", "HPJR"):
+                return "jour rouge (tarif en cours : " + state + ")"
+        try:
+            mode = str(
+                self.get_state(self.args["mode_de_fonctionnement"])
+            ).strip()
+        except Exception:
+            mode = ""
+        if mode == "Hors Gel":
+            return "mode Hors Gel (brassages antigel, vitesse éco)"
+        try:
+            if self._seasonal_heating_blocked():
+                return "chauffage arrêté pour la saison"
+        except Exception:
+            pass
+        return None
+
     def _measurement_retry_blocked(self, now=None):
         failed_at = getattr(
             self,
@@ -957,7 +1024,12 @@ class PredictiveHeatingSupport(DecisionSupport):
             age = max(0.0, (now - failed_at).total_seconds())
         except TypeError:
             return False
-        return age < self.chauffage_predictif_mesure_retry_s
+        retry_s = getattr(
+            self,
+            "chauffage_predictif_measurement_retry_s_active",
+            self.chauffage_predictif_mesure_retry_s,
+        )
+        return age < retry_s
 
     def _measurement_progress(self, now=None):
         now = now or datetime.datetime.now()
@@ -1020,17 +1092,29 @@ class PredictiveHeatingSupport(DecisionSupport):
             "stability",
         )
 
-    def _abort_measurement_timeout(self, now, reason):
+    def _abort_measurement_timeout(self, now, reason, long_retry=False):
         self.chauffage_predictif_measurement_failed_at = now
+        retry_s = (
+            getattr(
+                self,
+                "chauffage_predictif_mesure_retry_apres_plafond_s",
+                21600,
+            )
+            if long_retry
+            else self.chauffage_predictif_mesure_retry_s
+        )
+        self.chauffage_predictif_measurement_retry_s_active = retry_s
         try:
             self._fault("chauffage_predictif_measurement_timeout", reason)
         except Exception:
             pass
         try:
+            retry_txt = (
+                f"{retry_s // 3600} h" if retry_s >= 3600 else f"{retry_s // 60} min"
+            )
             self.log(
                 f"Mesure température abandonnée: {reason}; "
-                f"nouvelle tentative dans "
-                f"{self.chauffage_predictif_mesure_retry_s // 60} min",
+                f"nouvelle tentative dans {retry_txt}",
                 log="piscine_log",
             )
         except Exception:
@@ -1100,6 +1184,8 @@ class PredictiveHeatingSupport(DecisionSupport):
         if not self.chauffage_predictif:
             return False
         if self.arret_force_actif():
+            return False
+        if self._measurement_forbidden_reason():
             return False
         if self._measurement_retry_blocked():
             return False
@@ -1208,6 +1294,40 @@ class PredictiveHeatingSupport(DecisionSupport):
             if self.chauffage_predictif_measurement_active:
                 self._reset_measurement_tracker()
             return False
+
+        forbidden = self._measurement_forbidden_reason()
+        if forbidden:
+            if self.chauffage_predictif_measurement_active:
+                try:
+                    self.log(
+                        "Mesure température interrompue : "
+                        f"{forbidden}. La pompe reprend sa vitesse normale.",
+                        log="piscine_log",
+                    )
+                except Exception:
+                    pass
+                self._reset_measurement_tracker()
+            return False
+
+        if self.chauffage_predictif_measurement_active:
+            began = (
+                self.chauffage_predictif_measurement_requested_at
+                or self.chauffage_predictif_measurement_started_at
+            )
+            if isinstance(began, datetime.datetime):
+                try:
+                    total = (now - began).total_seconds()
+                except TypeError:
+                    total = 0.0
+                max_s = getattr(
+                    self, "chauffage_predictif_mesure_duree_max_s", 1800
+                )
+                if total >= max_s:
+                    return self._abort_measurement_timeout(
+                        now,
+                        f"durée maximale de {max_s // 60} min dépassée",
+                        long_retry=True,
+                    )
 
         if not self.pompe_est_on():
             if self.chauffage_predictif_measurement_active:

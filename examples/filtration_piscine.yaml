@@ -183,6 +183,10 @@ pool_manager:
   # 5 min grace to establish/finish the measurement, 15 min before retry.
   chauffage_predictif_mesure_timeout_grace_s: 300
   chauffage_predictif_mesure_retry_s: 900
+  chauffage_predictif_mesure_duree_max_s: 1800
+  chauffage_predictif_mesure_retry_apres_plafond_s: 21600
+  tarif_jour_rouge_entity: sensor.teleinfo_ptec
+  tarif_jour_rouge_etat: HPJR
 
   # Compatibility interval retained for existing installations. v0.10.4 closes
   # a complete learning interval as soon as apprentissage_min_s is reached,
